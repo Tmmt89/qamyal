@@ -358,9 +358,9 @@ function pageRec() {
     <div class="rec-layout"><div class="card rec-main" id="rm"></div><div class="card live" id="rs"></div></div>
   </div>`;
   $('#upl').onclick = pickFiles;
-  let cfg = { rec_source: 'mic', rec_live: true, rec_service: 'skype' }, services = {}, skypeProbe = false;
+  let cfg = { rec_source: 'mic', rec_live: true, rec_service: 'skype' }, services = {}, skypeProbe = false, scr = { supported: false, monitors: [] };
   let mode = null, liveFrom = 0, marksN = -1, lastJob = null, sysHeard = Date.now();
-  api('/api/settings').then(r => { if (gone()) return; cfg = r.settings; services = r.services || {}; skypeProbe = !!r.skype_probe; if (mode === 'idle') renderIdle(); }).catch(() => {});
+  api('/api/settings').then(r => { if (gone()) return; cfg = r.settings; services = r.services || {}; skypeProbe = !!r.skype_probe; scr = r.screen || scr; if (mode === 'idle') renderIdle(); }).catch(() => {});
 
   function renderIdle() {
     mode = 'idle';
@@ -382,6 +382,15 @@ function pageRec() {
         <div class="seg" id="npl" style="display:flex" title="Если знаете — укажите: голоса разделятся точнее">${['не знаю', 2, 3, 4, 5, '6+'].map((v, k) => `<button data-n="${k ? (v === '6+' ? 6 : v) : 0}" class="${k === 0 ? 'on' : ''}" style="flex:${k ? 1 : 1.6};justify-content:center;white-space:nowrap">${v}</button>`).join('')}</div></div>
       <div class="field"><label class="switch"><input type="checkbox" id="rlive" ${cfg.rec_live ? 'checked' : ''}><i></i>
         <span>Живая расшифровка <span class="small muted tip">— текст появляется во время записи</span></span></label></div>
+      ${scr.supported ? `<div class="field"><label class="switch"><input type="checkbox" id="rscr" ${cfg.rec_screen ? 'checked' : ''}><i></i>
+        <span>Записывать экран <span class="small muted tip">— презентации, показ экрана; получится видео</span></span></label>
+        <div id="scrrow" style="margin-top:8px;${cfg.rec_screen ? '' : 'display:none'}">
+          <div class="seg" id="sq" style="display:flex">${[['low', 'Экономно'], ['normal', 'Обычно'], ['high', 'Высоко']].map(([v, l]) =>
+            `<button data-v="${v}" class="${(cfg.rec_screen_quality || 'normal') === v ? 'on' : ''}" style="flex:1;justify-content:center">${l}</button>`).join('')}</div>
+          <div class="small muted tip" id="sqhelp" style="margin-top:5px"></div>
+          ${scr.monitors.length > 1 ? `<select class="input" id="smon" style="margin-top:8px">${scr.monitors.map((m, i) =>
+            `<option value="${i}" ${i === (cfg.rec_screen_monitor || 0) ? 'selected' : ''}>${i ? 'Монитор ' + (i + 1) : 'Основной монитор'} · ${m.w}×${m.h}</option>`).join('')}</select>` : ''}
+        </div></div>` : ''}
       <div class="rec-go"><button class="bigbtn" id="go" title="Начать запись">${icon('mic')}</button>
         <div><div class="timer muted">00:00</div><div class="rec-state">Нажмите, чтобы начать запись</div></div></div>
       ${lastJob ? `<div class="note" style="margin-top:12px">Запись сохранена и отправлена на расшифровку. <a href="#/job/${lastJob}">Открыть</a></div>` : ''}`;
@@ -406,14 +415,36 @@ function pageRec() {
     $$('#src button').forEach(b => b.onclick = () => { setSrc(b.dataset.v); api('/api/settings', { rec_source: b.dataset.v }).catch(() => {}); });
     $('#rlive').onchange = e => api('/api/settings', { rec_live: e.target.checked }).catch(() => {});
     if (ST && ST.speech === false) { $('#rlive').checked = false; $('#rlive').disabled = true; }
+    if ($('#rscr')) {
+      const sqHelp = {
+        low: '720p, 5 кадров в секунду — хватает для слайдов. Около 100–150 МБ за час.',
+        normal: '1080p, 15 кадров в секунду — слайды и показ программ. Около 300–500 МБ за час.',
+        high: 'Полное разрешение экрана, 30 кадров в секунду — плавное видео. 1 ГБ за час и больше.',
+      };
+      const setSq = v => {
+        cfg.rec_screen_quality = v;
+        $$('#sq button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
+        $('#sqhelp').textContent = sqHelp[v];
+      };
+      setSq(cfg.rec_screen_quality || 'normal');
+      $('#rscr').onchange = e => {
+        cfg.rec_screen = e.target.checked;
+        $('#scrrow').style.display = e.target.checked ? '' : 'none';
+        api('/api/settings', { rec_screen: e.target.checked }).catch(() => {});
+      };
+      $$('#sq button').forEach(b => b.onclick = () => { setSq(b.dataset.v); api('/api/settings', { rec_screen_quality: b.dataset.v }).catch(() => {}); });
+      if ($('#smon')) $('#smon').onchange = e => { cfg.rec_screen_monitor = +e.target.value; api('/api/settings', { rec_screen_monitor: +e.target.value }).catch(() => {}); };
+    }
     let speakers = 0;
     $$('#npl button').forEach(b => b.onclick = () => { speakers = +b.dataset.n; $$('#npl button').forEach(x => x.classList.toggle('on', x === b)); });
     $('#go').onclick = async () => {
       try {
-        await api('/api/rec/start', { source: cfg.rec_source, name: $('#rname').value, live: $('#rlive').checked, speakers, service: cfg.rec_service });
+        $('#go').disabled = true;
+        await api('/api/rec/start', { source: cfg.rec_source, name: $('#rname').value, live: $('#rlive').checked, speakers, service: cfg.rec_service,
+          screen: !!($('#rscr') && $('#rscr').checked), screen_quality: cfg.rec_screen_quality || 'normal', monitor: cfg.rec_screen_monitor || 0 });
         liveFrom = 0; marksN = -1; lastJob = null;
         tick();
-      } catch (e) { fail(e); }
+      } catch (e) { if ($('#go')) $('#go').disabled = false; fail(e); }
     };
     $('#rs').classList.add('tip');
     $('#rs').innerHTML = `<h2>Подсказки</h2>
@@ -487,7 +518,7 @@ function pageRec() {
     $('#rm').parentElement.classList.toggle('recording-now', st.state === 'recording');
     $('#tmr').textContent = fmtT(st.elapsed);
     $('#rst').innerHTML = st.error ? `<span style="color:var(--rec)">${esc(st.error)}</span>`
-      : st.state === 'paused' ? 'Пауза' : '<span style="color:var(--rec)">● Идёт запись</span>';
+      : st.state === 'paused' ? 'Пауза' : `<span style="color:var(--rec)">● Идёт запись${st.screen ? ' · экран' : ''}</span>`;
     const pz = $('#pz');
     pz.dataset.s = st.state;
     pz.innerHTML = st.state === 'paused' ? `${icon('play')}Продолжить` : `${icon('pause')}Пауза`;
@@ -838,7 +869,7 @@ async function pageJob(id, q) {
 function jobProgress(id, data) {
   const render = d => {
     const j = d.job;
-    const stages = [['prepare', 'подготовка'], ['gigaam', 'GigaAM'], ['diar', 'голоса'], ['voices', 'кто есть кто'], ['whisper', 'Whisper'], ['edit', 'редактура'], ['render', 'оформление']];
+    const stages = [['prepare', 'подготовка'], ...(j.screen ? [['video', 'видео']] : []), ['gigaam', 'GigaAM'], ['diar', 'голоса'], ['voices', 'кто есть кто'], ['whisper', 'Whisper'], ['edit', 'редактура'], ['render', 'оформление']];
     const doneKeys = Object.keys(d.times || {});
     view.innerHTML = `<div class="page">
       <div class="job-head"><a class="btn ghost sm" href="#/lib">${icon('back')}</a>
@@ -889,6 +920,7 @@ function jobDone(id, data, q) {
       <div style="flex:1;min-width:0"><div class="title" id="jt" title="Щёлкните, чтобы переименовать">${esc(R.title)}</div>
         <div class="meta"><button class="projbtn" id="pj" title="Проекты — щёлкните, чтобы изменить">${PJ.length ? PJ.map(p => projChip(p)).join('') : `<span class="proj empty">${icon('folder')}указать проект</span>`}</button>
           ${esc(R.date)} · ${fmtDur(R.duration)}${data.job.service ? ` · ${esc(data.job.service)}` : ''}${data.versions ? ` · <a href="#" id="undo1">${icon('refresh')} отменить последнее изменение</a>` : ''}</div></div>
+      ${data.has_video ? `<button class="btn sm" id="bvid" title="Открыть видео с экрана">${icon('screen')}Видео</button>` : ''}
       <button class="btn sm" id="bw">${icon('word')}Word</button>
       <button class="btn sm" id="bf">${icon('folder')}Папка</button>
       <button class="btn sm ghost" id="bm" title="Ещё">${icon('more')}</button></div>
@@ -1129,6 +1161,7 @@ function jobDone(id, data, q) {
     if (t && t !== R.title) api(`/api/job/${id}/title`, { title: t }).then(() => { R.title = t; toast('Название сохранено'); }).catch(fail);
   };
   $('#bw').onclick = () => api(`/api/job/${id}/open`, { what: 'docx' }).catch(fail);
+  if ($('#bvid')) $('#bvid').onclick = () => api(`/api/job/${id}/open`, { what: 'video' }).catch(fail);
   $('#bf').onclick = () => api(`/api/job/${id}/open`, { what: 'folder' }).catch(fail);
   $('#bm').onclick = () => {
     const p = popover($('#bm'), `<div style="display:grid;gap:6px">

@@ -89,6 +89,19 @@ def process(d: Path, s: dict) -> None:
         src = next(p for p in drafts.iterdir() if p.stem == "исходник")
         update_job(d, duration=asr.prepare(src, wav, mp3))
 
+    def video(progress):
+        """Запись экрана: куски картинки + звук → видео.mp4 и карта «время записи → время видео»."""
+        import screen
+        if not (drafts / "экран" / screen.META).exists():
+            return
+        job = read_job(d)
+        anchors = job.get("rec_anchors") or []
+        if not anchors:            # восстановленная запись: считаем, что звук начался с первого кадра
+            meta = read_json(drafts / "экран" / screen.META, {})
+            v0 = next((x["v0"] for x in meta.get("segments", []) if x.get("v0")), 0)
+            anchors = [[0.0, v0]]
+        update_job(d, video_map=screen.mux(d, wav, anchors, progress))
+
     def gigaam(progress):
         write_json(drafts / "gigaam.json", asr.run_gigaam(audio(), s["threads"], progress))
 
@@ -221,7 +234,7 @@ def process(d: Path, s: dict) -> None:
             cache.pop("a", None)
             wav.unlink()
 
-    for key, fn in (("prepare", prepare), ("gigaam", gigaam), ("diar", diar), ("voices", recognize),
+    for key, fn in (("prepare", prepare), ("video", video), ("gigaam", gigaam), ("diar", diar), ("voices", recognize),
                     ("whisper", whisper), ("edit", edit), ("render", finish)):
         run(key, fn)
     job = update_job(d, status="done", stage="", finished=time.time())

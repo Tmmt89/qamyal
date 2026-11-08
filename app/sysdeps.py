@@ -376,3 +376,74 @@ def default_threads() -> int:
     if IS_MAC:
         return max(2, min(4, (os.cpu_count() or 4) // 2))
     return 2
+
+
+# ---------- запись экрана (ffmpeg) ----------
+
+def screen_supported() -> bool:
+    """Запись экрана пока есть только в Windows; на Mac нужен ScreenCaptureKit и разрешение «Запись экрана»."""
+    return IS_WIN
+
+
+def screen_monitors() -> list:
+    """Мониторы в настоящих пикселях (без масштаба Windows): [{x, y, w, h, primary}], основной — первым."""
+    if not IS_WIN:
+        return []
+    import ctypes
+    from ctypes import wintypes
+    u = ctypes.windll.user32
+    try:
+        old = u.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))     # PER_MONITOR_AWARE_V2: координаты без масштаба
+    except AttributeError:
+        old = None
+
+    class MONITORINFO(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT), ("rcWork", wintypes.RECT),
+                    ("dwFlags", wintypes.DWORD)]
+
+    out = []
+    proc = ctypes.WINFUNCTYPE(ctypes.c_int, wintypes.HMONITOR, wintypes.HDC, ctypes.POINTER(wintypes.RECT),
+                              wintypes.LPARAM)
+
+    def cb(h, _dc, _rc, _lp):
+        mi = MONITORINFO()
+        mi.cbSize = ctypes.sizeof(MONITORINFO)
+        if u.GetMonitorInfoW(h, ctypes.byref(mi)):
+            r = mi.rcMonitor
+            out.append({"x": r.left, "y": r.top, "w": r.right - r.left, "h": r.bottom - r.top,
+                        "primary": bool(mi.dwFlags & 1)})
+        return 1
+
+    try:
+        u.EnumDisplayMonitors(None, None, proc(cb), 0)
+    finally:
+        if old:
+            u.SetThreadDpiAwarenessContext(ctypes.c_void_p(old))
+    out.sort(key=lambda m: (not m["primary"], m["x"], m["y"]))
+    return out
+
+
+def screen_inputs(fps: int, monitor: int = 0) -> list:
+    """Способы снять экран для ffmpeg, лучший — первым: (аргументы до -i включительно, фильтр в начало цепочки)."""
+    if not IS_WIN:
+        return []
+    mons = screen_monitors()
+    m = mons[monitor] if 0 <= monitor < len(mons) else (mons[0] if mons else None)
+    out = []
+    if len(mons) <= 1:    # Desktop Duplication: почти не грузит процессор (номер выхода DXGI = основной монитор)
+        out.append((["-f", "lavfi", "-i", f"ddagrab=framerate={fps}:output_idx=0"], "hwdownload,format=bgra"))
+    rect = ["-offset_x", str(m["x"]), "-offset_y", str(m["y"]), "-video_size", f"{m['w']}x{m['h']}"] if m else []
+    out.append((["-f", "gdigrab", "-framerate", str(fps), *rect, "-i", "desktop"], ""))
+    return out
+
+
+def screen_encoders(quality: int, fps: int) -> list:
+    """Кодеры видео, лучший — первым: (аргументы, формат кадра). Аппаратный Intel Quick Sync почти не тратит процессор."""
+    gop = ["-g", str(max(2, fps * 2))]
+    out = []
+    if IS_WIN:
+        out.append((["-c:v", "h264_qsv", "-global_quality", str(quality), "-look_ahead", "0", "-async_depth", "1", *gop],
+                    "nv12"))
+    out.append((["-c:v", "libx264", "-preset", "ultrafast" if fps > 5 else "veryfast", "-crf", str(quality),
+                 "-tune", "stillimage" if fps <= 5 else "zerolatency", *gop], "yuv420p"))
+    return out

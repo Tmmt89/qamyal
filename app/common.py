@@ -67,6 +67,9 @@ DEFAULT_SETTINGS = {
     "rec_source": "mic",                     # mic | system | both
     "rec_live": True,                        # живая расшифровка во время записи
     "rec_service": "skype",                  # через что созвон (см. SERVICES)
+    "rec_screen": False,                     # писать экран вместе со звуком
+    "rec_screen_quality": "normal",          # low | normal | high (screen.QUALITY)
+    "rec_screen_monitor": 0,                 # какой монитор, 0 — основной
     "mic_device": "",                        # пусто = микрофон по умолчанию
     "mini_top": False,                       # мини-окно поверх всех окон
     "mini_rect": None,                       # где и какого размера его оставили (Windows): x, y, ширина, высота
@@ -84,6 +87,7 @@ AUDIO_EXT = {".mp3", ".m4a", ".wav", ".ogg", ".opus", ".oga", ".wma", ".aac", ".
 # Этапы обработки: ключ, подпись, доля от длины записи (для оценки оставшегося времени).
 STAGES = [
     ("prepare", "подготовка", 0.01),
+    ("video", "видео с экрана", 0.01),
     ("gigaam", "распознавание GigaAM", 0.25),
     ("diar", "разметка голосов", 0.35),
     ("voices", "узнавание голосов", 0.03),

@@ -82,6 +82,10 @@ body{{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 "Segoe UI",sy
 header{{position:sticky;top:0;z-index:1;background:var(--card);border-bottom:1px solid var(--line);padding:12px 16px}}
 header h1{{font-size:19px;margin:0 0 2px}} header .meta{{color:var(--muted);font-size:13px;margin-bottom:8px}}
 audio{{width:100%;height:36px}}
+.media{{display:flex;gap:8px;align-items:center}} .media audio{{flex:1}}
+.vbtn{{font:inherit;font-size:14px;padding:6px 12px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg);cursor:pointer}}
+.vbtn.on{{background:var(--accent);border-color:var(--accent);color:#fff}}
+video{{display:block;width:100%;max-height:45vh;background:#000;border-radius:6px;margin-top:8px}}
 main{{max-width:860px;margin:0 auto;padding:8px 16px 80px}}
 h2{{font-size:16px;margin:24px 0 6px}} ul{{margin:0;padding-left:22px}}
 .turn{{display:grid;grid-template-columns:56px 1fr;gap:8px;padding:6px 8px;border-radius:6px}}
@@ -89,19 +93,28 @@ h2{{font-size:16px;margin:24px 0 6px}} ul{{margin:0;padding-left:22px}}
 .ts{{color:var(--accent);font-size:13px;padding-top:2px;cursor:pointer;text-decoration:none;font-variant-numeric:tabular-nums}}
 .who{{font-weight:600}}
 </style></head><body>
-<header><h1>{title}</h1><div class="meta">{meta}</div><audio id="a" controls preload="metadata" src="запись.mp3"></audio></header>
+<header><h1>{title}</h1><div class="meta">{meta}</div><div class="media"><audio id="a" controls preload="metadata" src="запись.mp3"></audio>{vbtn}</div>{video}</header>
 <main>{sections}<h2>Расшифровка</h2>
 {turns}
 </main>
 <script>
-const a=document.getElementById('a'),rows=[...document.querySelectorAll('.turn')],ts=rows.map(r=>+r.dataset.t);
-document.querySelectorAll('.ts').forEach(x=>x.onclick=e=>{{e.preventDefault();a.currentTime=+x.closest('.turn').dataset.t;a.play();}});
-let cur=-1;a.ontimeupdate=()=>{{let i=-1;for(let k=0;k<ts.length&&ts[k]<=a.currentTime+0.3;k++)i=k;
-if(i!==cur){{if(cur>=0)rows[cur].classList.remove('now');if(i>=0){{rows[i].classList.add('now');if(!a.paused)rows[i].scrollIntoView({{block:'center',behavior:'smooth'}});}}cur=i;}}}};
+const a=document.getElementById('a'),v=document.getElementById('v'),vb=document.getElementById('vb'),M={vmap};
+const rows=[...document.querySelectorAll('.turn')],ts=rows.map(r=>+r.dataset.t);
+// у видео свои секунды (паузы записи вырезаны по-своему): переводим по карте [запись с, по, видео]
+const toV=t=>{{for(const [r0,r1,x] of M)if(t<r1)return x+Math.max(0,t-r0);const l=M[M.length-1];return l?l[2]+t-l[0]:t;}};
+const fromV=x=>{{for(const [r0,r1,y] of M)if(x<y+r1-r0)return r0+Math.max(0,x-y);const l=M[M.length-1];return l?l[1]:x;}};
+let m=a;const now=()=>m===v?fromV(v.currentTime):a.currentTime;
+const seek=(t,play)=>{{if(m===v)v.currentTime=toV(t);else a.currentTime=t;if(play)m.play();}};
+document.querySelectorAll('.ts').forEach(x=>x.onclick=e=>{{e.preventDefault();seek(+x.closest('.turn').dataset.t,true);}});
+if(vb)vb.onclick=()=>{{const t=now(),go=!m.paused;m.pause();m=m===a?v:a;v.hidden=m!==v;vb.classList.toggle('on',m===v);seek(t,go);}};
+let cur=-1;const upd=e=>{{if(e.target!==m)return;const t=now();let i=-1;for(let k=0;k<ts.length&&ts[k]<=t+0.3;k++)i=k;
+if(i!==cur){{if(cur>=0)rows[cur].classList.remove('now');if(i>=0){{rows[i].classList.add('now');if(!m.paused)rows[i].scrollIntoView({{block:'center',behavior:'smooth'}});}}cur=i;}}}};
+a.ontimeupdate=upd;if(v)v.ontimeupdate=upd;
 </script></body></html>"""
 
 
-def write_html(res: dict, path: Path) -> None:
+def write_html(res: dict, path: Path, video: list = None) -> None:
+    """video — карта «время записи → время видео», если рядом лежит видео.mp4 (запись экрана)."""
     e = html.escape
     secs = "".join(f"<h2>{e(title)}</h2><ul>{''.join(f'<li>{e(i)}</li>' for i in items)}</ul>"
                    for title, items in sections(res) if items)
@@ -109,8 +122,12 @@ def write_html(res: dict, path: Path) -> None:
         f'<div class="turn" data-t="{t["t"]:.1f}"><a class="ts" href="#">{fmt_time(t["t"])}</a>'
         f'<div><span class="who">{e(t["who"])}:</span> {e(t["text"])}</div></div>'
         for t in res["turns"])
-    path.write_text(PAGE.format(title=e(res["title"]), meta=e(meta_line(res)), sections=secs,
-                                turns=turns), encoding="utf-8")
+    has_video = video is not None
+    path.write_text(PAGE.format(
+        title=e(res["title"]), meta=e(meta_line(res)), sections=secs, turns=turns,
+        vbtn='<button class="vbtn" id="vb" title="Показать запись экрана">▶ Видео</button>' if has_video else "",
+        video='<video id="v" hidden controls preload="metadata" src="видео.mp4"></video>' if has_video else "",
+        vmap=json.dumps(video or [])), encoding="utf-8")
 
 
 def file_base(res: dict, what: str = "", limit: int = 70) -> str:
@@ -149,6 +166,10 @@ def render(job_dir: Path, res: dict) -> None:
             except OSError:
                 pass                                # открыт в Word — оставляем как есть
     write_docx(res, new["docx"])
-    write_html(res, new["html"])
+    video = None
+    if (job_dir / "видео.mp4").exists():
+        from common import read_job
+        video = read_job(job_dir).get("video_map") or []
+    write_html(res, new["html"], video)
     (job_dir / "черновики" / "файлы.json").write_text(
         json.dumps({k: p.name for k, p in new.items()}, ensure_ascii=False), encoding="utf-8")

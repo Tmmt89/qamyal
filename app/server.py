@@ -19,7 +19,7 @@ from common import (APP, GLOSSARY, INCOMING, JOBS, SERVICES, STAGE_LABEL, TASKS_
                     write_job, write_json, add_project, load_projects, save_projects)
 from dictate import Dictation
 from recorder import Recorder, devices
-from sysdeps import IS_WIN, open_console, open_path
+from sysdeps import IS_WIN, open_console, open_path, screen_monitors, screen_supported
 
 WEB = APP / "web"
 UI_PROFILE = APP / ".ui-profile"       # профиль Chrome для окон программы (Windows), тот же, что в app.py
@@ -72,7 +72,7 @@ def summary(d: Path, j: dict) -> dict:
         "progress": j.get("progress", 0), "eta": eta(j) if st == "working" else 0,
         "paused": j.get("paused", False), "error": j.get("error", ""),
         "participants": res.get("participants", []), "lead": (res.get("summary") or [""])[0],
-        "recorded": j.get("recorded", ""), "marks": len(j.get("marks", [])),
+        "recorded": j.get("recorded", ""), "marks": len(j.get("marks", [])), "screen": j.get("screen", ""),
         "service": SERVICES.get(j.get("service") or "", ""),
         "projects": projects_of(j) or projects_of(res),
         "tasks": len(res.get("tasks") or []),
@@ -299,6 +299,7 @@ def job(jid):
     out["live"] = read_json(d / "черновики" / "живая.json", [])
     out["qa"] = read_json(d / "черновики" / "вопросы.json", [])
     out["has_audio"] = (d / "запись.mp3").exists()
+    out["has_video"] = (d / "видео.mp4").exists()
     dia = read_json(d / "черновики" / "голоса.json", [])
     if res and dia:
         mapping = voices.full_mapping(dia, res["turns"], read_json(d / "черновики" / "голоса-узнаны.json", {}))      # по текущим именам (после правок)
@@ -619,7 +620,7 @@ def job_action(jid, action):
         voices.save_db({k: v for k, v in db.items() if v["jobs"]})
     elif action == "open":
         what = body().get("what", "folder")
-        target = render.outputs(d).get(what, d)
+        target = d / "видео.mp4" if what == "video" else render.outputs(d).get(what, d)
         open_path(target)
     ensure_worker()
     return {"ok": True}
@@ -1018,6 +1019,7 @@ def settings_get():
     s = load_settings()
     return {"settings": s, "devices": devs, "codex": codex_status(s), "services": SERVICES,
             "skype_probe": IS_WIN,                 # подсказки Skype для бизнеса есть только в Windows
+            "screen": {"supported": screen_supported(), "monitors": screen_monitors()},
             "paths": {"jobs": str(JOBS), "root": str(APP.parent)}}
 
 
@@ -1050,7 +1052,8 @@ def claude_link_set():
 def settings_set():
     s = load_settings()
     allowed = {"editor", "claude_model", "codex_model", "openai_url", "openai_model", "whisper", "user_name",
-               "notify", "theme", "lang", "rec_source", "rec_live", "rec_service", "mic_device", "mini_top"}
+               "notify", "theme", "lang", "rec_source", "rec_live", "rec_service", "mic_device", "mini_top",
+               "rec_screen", "rec_screen_quality", "rec_screen_monitor"}
     s.update({k: v for k, v in body().items() if k in allowed})
     save_settings(s)
     return {"settings": s}
@@ -1116,8 +1119,11 @@ def rec_action(action):
             from components import speech_ready
             s = load_settings()
             live = bool(b.get("live", s["rec_live"])) and speech_ready()     # живой расшифровке нужна модель
+            shot = bool(b.get("screen", s["rec_screen"])) and screen_supported()
+            quality = b.get("screen_quality", s["rec_screen_quality"])
             rec.start(b.get("source", s["rec_source"]), b.get("name", ""), live,
-                      s.get("mic_device", ""), int(b.get("speakers") or 0), b.get("service", s["rec_service"]))
+                      s.get("mic_device", ""), int(b.get("speakers") or 0), b.get("service", s["rec_service"]),
+                      screen=quality if shot else "", monitor=int(b.get("monitor", s["rec_screen_monitor"]) or 0))
         elif action == "pause":
             rec.pause()
         elif action == "resume":
