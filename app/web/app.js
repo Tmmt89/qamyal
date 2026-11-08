@@ -380,6 +380,8 @@ function pageRec() {
         title="Имена в названии помогают правильно подписать участников"></div>
       <div class="field"><label class="lbl">Сколько человек будет говорить, вместе с вами</label>
         <div class="seg" id="npl" style="display:flex" title="Если знаете — укажите: голоса разделятся точнее">${['не знаю', 2, 3, 4, 5, '6+'].map((v, k) => `<button data-n="${k ? (v === '6+' ? 6 : v) : 0}" class="${k === 0 ? 'on' : ''}" style="flex:${k ? 1 : 1.6};justify-content:center;white-space:nowrap">${v}</button>`).join('')}</div></div>
+      <div class="rec-go"><button class="bigbtn" id="go" title="Начать запись">${icon('mic')}</button>
+        <div><div class="timer muted">00:00</div><div class="rec-state">Нажмите, чтобы начать запись</div></div></div>
       <div class="field"><label class="switch"><input type="checkbox" id="rlive" ${cfg.rec_live ? 'checked' : ''}><i></i>
         <span>Живая расшифровка <span class="small muted tip">— текст появляется во время записи</span></span></label></div>
       ${scr.supported ? `<div class="field"><label class="switch"><input type="checkbox" id="rscr" ${cfg.rec_screen ? 'checked' : ''}><i></i>
@@ -391,8 +393,6 @@ function pageRec() {
           ${scr.monitors.length > 1 ? `<select class="input" id="smon" style="margin-top:8px">${scr.monitors.map((m, i) =>
             `<option value="${i}" ${i === (cfg.rec_screen_monitor || 0) ? 'selected' : ''}>${i ? 'Монитор ' + (i + 1) : 'Основной монитор'} · ${m.w}×${m.h}</option>`).join('')}</select>` : ''}
         </div></div>` : ''}
-      <div class="rec-go"><button class="bigbtn" id="go" title="Начать запись">${icon('mic')}</button>
-        <div><div class="timer muted">00:00</div><div class="rec-state">Нажмите, чтобы начать запись</div></div></div>
       ${lastJob ? `<div class="note" style="margin-top:12px">Запись сохранена и отправлена на расшифровку. <a href="#/job/${lastJob}">Открыть</a></div>` : ''}`;
     const help = {
       mic: 'Микрофон ноутбука — для разговоров вживую.',
