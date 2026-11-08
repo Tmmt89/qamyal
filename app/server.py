@@ -409,8 +409,8 @@ def rename_in_texts(res: dict, old: str, new: str) -> None:
         def sub(mm):
             if not fn:
                 return new
-            k = ends.index(mm.group(1))                      # первый подходящий падеж (род. = вин. у мужских)
-            return fn[0] + fn[1][k]
+            forms = {fn[0] + fn[1][k] for k, e in enumerate(ends) if e == mm.group(1)}
+            return forms.pop() if len(forms) == 1 else new   # падеж не ясен («Анне» — дат. или предл.) — как есть
     else:
         rx, sub = re.compile(rf"(?<!\w){re.escape(old)}(?!\w)"), new
     for key in ("summary", "decisions"):

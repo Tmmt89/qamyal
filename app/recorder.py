@@ -13,7 +13,7 @@ import numpy as np
 import soundcard as sc   # импорт здесь, в главном потоке: он поднимает COM на всё время работы
 import soundfile as sf
 
-from common import APP, INCOMING, PAUSE, SERVICES, create_job, load_settings, spawn_worker, update_job, write_json
+from common import APP, INCOMING, PAUSE, SERVICES, create_job, load_settings, spawn_worker, write_json
 from sysdeps import IS_MAC, IS_WIN
 
 SR = 16000
@@ -176,31 +176,46 @@ class Recorder:
 
     def _start_screen(self, quality: str, monitor: int):
         import screen
-        try:
-            self.screen = screen.ScreenRecorder(self.path, quality, monitor)
-        except Exception as e:  # noqa: BLE001 — без экрана запись звука всё равно идёт
-            self.error = f"Экран: {e}"
-            return
-        self._screen_segment()
+        self.screen = screen.ScreenRecorder(self.path, quality, monitor)
+        self._screen_segment()           # не вышло — звук всё равно пишется, сторож попробует ещё
 
     def _screen_segment(self):
         if not self.screen:
             return
         try:
             self.screen.start()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 — без экрана запись звука всё равно идёт
             self.error = f"Экран: {e}"
+            return False
+        if self.error.startswith("Экран:"):
+            self.error = ""              # экран снова пишется — старое сообщение убираем
+        return True
+
+    def _attach_screen(self, audio: Path):
+        """Куски экрана — в черновики задания, пока его ещё не видит обработчик (до записи job.json)."""
+        if not self.screen:
+            return None
+
+        def go(job: Path):
+            import screen
+            try:
+                screen.attach(audio, job)
+            except OSError as e:          # файл занят — звук важнее: задание всё равно ставим в очередь
+                self.error = f"Экран: {e}"
+        return go
 
     def _watch_screen(self):
-        """ffmpeg может упасть (экран блокировки, смена разрешения) — начинаем новый кусок, не больше 20 раз."""
-        restarts = 0
+        """ffmpeg может упасть или не начать (экран блокировки, смена разрешения) — начинаем новый кусок.
+        Пробуем, пока идёт запись, но после неудачи — не чаще раза в 10 с."""
+        wait = 2
         while self.running and self.screen:
-            time.sleep(2)
+            time.sleep(wait)
             sc_ = self.screen
-            if sc_ and self.state == "recording" and sc_.proc is not None and not sc_.alive() and restarts < 20:
-                restarts += 1
-                sc_.stop()
-                self._screen_segment()
+            if not sc_ or self.state != "recording" or sc_.alive():
+                wait = 2
+                continue
+            sc_.stop()                   # упавший кусок закрываем (если он был)
+            wait = 2 if self._screen_segment() else 10
 
     def mark(self, note: str = "") -> dict:
         m = {"t": round(self.frames / SR, 1), "note": note.strip()}
@@ -223,7 +238,7 @@ class Recorder:
                 t.join(timeout=3)
             self.file.close()
             if self.screen:
-                self.screen.stop()
+                self.screen.stop(final=True)
             skype_log = self._stop_skype_probe()
             scout_log = self._stop_scout()
             hints_log = self.path.with_suffix(".hints.jsonl")
@@ -252,11 +267,10 @@ class Recorder:
                 extra = {"marks": self.marks, "recorded": self.source, "num_speakers": self.speakers,
                          "service": self.service, "rec_t0": self.t0, "rec_anchors": self.anchors}
                 audio = Path(self.path)
-                job = create_job(audio, s, move=True, name=title, when=self.started, extra=extra)
-                if self.screen:
-                    import screen
-                    if screen.attach(audio, job):
-                        update_job(job, screen=self.screen.quality)
+                if self.screen and self.screen.segments:
+                    extra["screen"] = self.screen.quality
+                job = create_job(audio, s, move=True, name=title, when=self.started, extra=extra,
+                                 before=self._attach_screen(audio))
                 if live_segs:
                     write_json(job / "черновики" / "живая.json", live_segs)
                 if skype_log and skype_log.exists():
@@ -471,10 +485,10 @@ def recover_orphans() -> list:
                 f.unlink()
                 continue
             when = datetime.strptime(f.stem[4:], "%Y%m%d-%H%M%S").timestamp()
-            job = create_job(f, s, move=True, name="Восстановленная запись", when=when,
-                             extra={"recorded": "recovered"})
             import screen
-            screen.attach(f, job)        # якорей звука нет — видео склеится по времени файла
+            job = create_job(f, s, move=True, name="Восстановленная запись", when=when,
+                             extra={"recorded": "recovered"},       # якорей звука нет — видео склеится по времени файла
+                             before=lambda d, f=f: screen.attach(f, d))
             out.append(job)
         except (OSError, ValueError):
             pass

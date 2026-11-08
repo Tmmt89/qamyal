@@ -148,18 +148,20 @@ def one_on_one(ev: list, people: dict, conv, duration: float):
     """Звонок один на один. Skype сообщает «кто говорит» только в групповых созвонах, а в звонке вдвоём
     событий нет. Зато собеседник ровно один: всё, что звучит из динамиков, пока идёт звонок, — его речь."""
     remote = [u for u, p in people.items() if not p["self"]]
-    # открытых разговоров может быть несколько (чат с одним, звонок с другим) — звонок там, где менялся звук
+    # открытым может быть и просто чат (а созвон — в Teams или Zoom), поэтому собеседником считаем только того,
+    # у кого в журнале менялось состояние звука; разговоров может быть несколько — звонок должен быть один
     in_call = [u for u in remote if any(e["kind"] == "av_state" and e.get("uri") == u for e in ev)]
-    cand = in_call or remote
-    if len(cand) != 1 or any(e["kind"] == "conversation" and e.get("participants", 0) > 2 for e in ev):
+    if len(in_call) != 1 or any(e["kind"] == "conversation" and e.get("participants", 0) > 2 for e in ev):
         return None
-    uri = cand[0]
-    hang = next((e["t"] for e in ev if e["kind"] == "av_state" and e.get("uri") == uri
-                 and e.get("state") == "Disconnected"), None)
-    end = min(conv(hang), duration) if hang else duration
-    if end < 1:
+    uri = in_call[0]
+    states = [(e["t"], e.get("state")) for e in ev if e["kind"] == "av_state" and e.get("uri") == uri]
+    begin = next((t for t, st in states if st == "Connected"), None)
+    hang = next((t for t, st in states if st == "Disconnected" and (begin is None or t > begin)), None)
+    a = conv(begin) if begin else 0.0
+    b = min(conv(hang), duration) if hang else duration
+    if b - a < 1:
         return None
-    return [(0.0, round(end, 2), uri)], people
+    return [(round(a, 2), round(b, 2), uri)], people
 
 
 # ---------- разметка ----------

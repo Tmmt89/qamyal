@@ -100,7 +100,12 @@ def process(d: Path, s: dict) -> None:
             meta = read_json(drafts / "экран" / screen.META, {})
             v0 = next((x["v0"] for x in meta.get("segments", []) if x.get("v0")), 0)
             anchors = [[0.0, v0]]
-        vmap = screen.mux(d, wav, anchors, progress)
+        try:
+            vmap = screen.mux(d, wav, anchors, progress)
+        except Exception as e:  # noqa: BLE001 — без видео расшифровка всё равно нужна; куски остаются в черновиках
+            log.warning("видео с экрана не собрано: %s", e)
+            update_job(d, video_error=str(e)[:300])
+            return
         update_job(d, video_map=vmap)
         if (d / screen.VIDEO).exists():
             try:

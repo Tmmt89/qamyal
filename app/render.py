@@ -46,7 +46,9 @@ def sections(res: dict) -> list:
 
 def shot_caption(f: dict, res: dict) -> str:
     """«Экран, 12:34 — что на экране» (подпись Claude из краткого содержания, если есть)."""
-    what = (res.get("screens") or {}).get(f["file"].rsplit("/", 1)[-1], "")
+    screens = res.get("screens")
+    what = screens.get(f["file"].rsplit("/", 1)[-1], "") if isinstance(screens, dict) else ""
+    what = what.strip() if isinstance(what, str) else ""          # ответ модели — не доверяем форме
     return f"Экран, {fmt_time(f['t'])}" + (f" — {what}" if what else "")
 
 

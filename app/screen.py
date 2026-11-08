@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from sysdeps import HIDDEN, find_program, screen_encoders, screen_inputs
+from sysdeps import HIDDEN, find_program, kill_with_parent, screen_encoders, screen_inputs
 
 # высота кадра (0 — как у экрана), кадров в секунду, качество сжатия (меньше — лучше и тяжелее)
 QUALITY = {"low": (720, 5, 30), "normal": (1080, 15, 27), "high": (0, 30, 23)}
@@ -50,11 +50,13 @@ def _probe(args: list) -> bool:
 
 
 def pick(quality: str, monitor: int) -> list:
+    """Рабочий способ съёмки запоминаем; неудачу — нет (экран мог быть заблокирован, позже получится)."""
     key = (quality, monitor)
     if key not in _works:
-        _works[key] = next((a for a in _variants(quality, monitor) if _probe(a)), None)
-    if not _works[key]:
-        raise RuntimeError("не удалось начать съёмку экрана")
+        found = next((a for a in _variants(quality, monitor) if _probe(a)), None)
+        if not found:
+            raise RuntimeError("не удалось начать съёмку экрана")
+        _works[key] = found
     return _works[key]
 
 
@@ -63,10 +65,11 @@ class ScreenRecorder:
 
     def __init__(self, base: Path, quality: str, monitor: int):
         self.base, self.quality, self.monitor = base, quality, monitor
-        self.args = pick(quality, monitor)
+        self.args = None                 # способ съёмки выбираем при первом удачном старте
         self.segments = []
         self.proc = None
         self.error = ""
+        self.closed = False              # «Стоп»: больше кусков не начинаем (сторож мог не успеть узнать)
         self.lock = threading.Lock()
 
     @property
@@ -80,15 +83,19 @@ class ScreenRecorder:
     def start(self, timeout: float = 8.0) -> None:
         """Новый кусок. Возвращается, когда ffmpeg выдал первые кадры, — звук начнётся уже после картинки."""
         with self.lock:
-            if self.proc:
+            if self.proc or self.closed:
                 return
+            self.args = self.args or pick(self.quality, self.monitor)
             f = self.base.with_name(f"{self.base.stem}.screen-{len(self.segments) + 1}.mkv")
             a = self.args
             log = self.base.with_suffix(".screen.log")
             with open(log, "ab") as err:          # ошибки ffmpeg — в файл: труба за час записи могла бы переполниться
+                # каждый кадр сразу на диск, блоки mkv — по 2 с: если ffmpeg упадёт, потеряется не больше 2 с
                 p = subprocess.Popen([ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", *a,
+                                      "-flush_packets", "1", "-cluster_time_limit", "2000",
                                       "-progress", "pipe:1", "-stats_period", "0.1", str(f)],
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err, **HIDDEN)
+            kill_with_parent(p)          # Qamyal упала — ffmpeg не должен писать экран дальше
             first = threading.Event()
             seg = {"file": f.name, "v0": None}
 
@@ -116,9 +123,10 @@ class ScreenRecorder:
     def alive(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
 
-    def stop(self) -> None:
-        """Закрыть кусок: «q» — ffmpeg дописывает файл как положено."""
+    def stop(self, final: bool = False) -> None:
+        """Закрыть кусок: «q» — ffmpeg дописывает файл как положено. final — запись закончена совсем."""
         with self.lock:
+            self.closed = self.closed or final
             p, self.proc = self.proc, None
             if p:
                 self._kill(p)
@@ -168,13 +176,24 @@ def attach(audio: Path, job: Path) -> bool:
 
 
 def duration(path: Path) -> float:
-    r = subprocess.run([find_program("ffprobe") or ffmpeg().replace("ffmpeg", "ffprobe"), "-v", "error",
-                        "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
+    """Длина видео, с. У куска, который ffmpeg не успел закрыть (упал), длины в заголовке нет — тогда по последнему кадру."""
+    probe = find_program("ffprobe") or str(Path(ffmpeg()).with_name(Path(ffmpeg()).name.replace("ffmpeg", "ffprobe")))
+    r = subprocess.run([probe, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
                        capture_output=True, text=True, **HIDDEN)
     try:
         return float(r.stdout.strip())
     except ValueError:
-        return 0.0
+        pass
+    r = subprocess.run([probe, "-v", "error", "-select_streams", "v", "-show_entries", "packet=pts_time,duration_time",
+                        "-of", "csv=p=0", str(path)], capture_output=True, text=True, **HIDDEN)
+    best = 0.0
+    for line in r.stdout.split():
+        try:
+            pts, dur = (float(x or 0) for x in (line.split(",") + ["0"])[:2])
+        except ValueError:
+            continue
+        best = max(best, pts + dur)
+    return best
 
 
 def timeline(segments: list, anchors: list, total: float) -> list:
@@ -206,11 +225,11 @@ def mux(job: Path, wav: Path, anchors: list, progress=lambda p: None) -> list:
     segs = [s for s in segs if s["dur"] > 0.2]
     if not segs:
         return []
-    audio, sr = sf.read(str(wav), dtype="float32")
+    audio, sr = sf.read(str(wav), dtype="int16")          # int16: три часа — 350 МБ, а не 1,4 ГБ
     if audio.ndim > 1:
-        audio = audio.mean(axis=1)
+        audio = audio.mean(axis=1).astype(np.int16)
     tl = timeline(segs, anchors, len(audio) / sr)
-    track = np.zeros(int(sum(s["dur"] for s in segs) * sr) + 1, dtype=np.float32)
+    track = np.zeros(int(sum(s["dur"] for s in segs) * sr) + 1, dtype=np.int16)
     for r0, r1, v in tl:
         a = audio[int(r0 * sr):int(r1 * sr)]
         i = int(v * sr)

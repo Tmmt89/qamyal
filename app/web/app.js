@@ -594,7 +594,8 @@ function pageMini() {
   let state = '', busy = false, src = '', lastWork = '';
   const loadSrc = () => api('/api/settings').then(r => {
     const s = r.settings;
-    src = SRC[s.rec_source] + (s.rec_source !== 'mic' && r.services[s.rec_service] ? ' · ' + r.services[s.rec_service] : '');
+    src = SRC[s.rec_source] + (s.rec_source !== 'mic' && r.services[s.rec_service] ? ' · ' + r.services[s.rec_service] : '')
+      + (s.rec_screen && r.screen && r.screen.supported ? ' · экран' : '');
   }).catch(() => {});
 
   async function tick() {
@@ -617,7 +618,7 @@ function pageMini() {
       $('#mt').textContent = fmtT(active ? st.elapsed : 0);
       $('#mt').classList.toggle('muted', !active);
       $('#mst').innerHTML = st.error ? `<span style="color:var(--rec)">${esc(st.error)}</span>`
-        : state === 'paused' ? 'Пауза' : active ? '<span style="color:var(--rec)">● Идёт запись</span>' : esc(src);
+        : state === 'paused' ? 'Пауза' : active ? `<span style="color:var(--rec)">● Идёт запись${st.screen ? ' · экран' : ''}</span>` : esc(src);
     } catch { /* программа перезапускается — следующий опрос покажет */ } finally { busy = false; }
   }
 

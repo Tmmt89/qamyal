@@ -242,8 +242,9 @@ def pending_jobs() -> list:
 
 
 def create_job(f: Path, s: dict, move: bool = False, name: str = None, when: float = None,
-               extra: dict = None) -> Path:
-    """Новая папка задания с исходником; обработчик подхватит её сам."""
+               extra: dict = None, before=None) -> Path:
+    """Новая папка задания с исходником; обработчик подхватит её сам.
+    before(папка) — что положить в задание до того, как оно станет видно очереди (job.json пишется последним)."""
     import shutil
     from datetime import datetime
 
@@ -262,6 +263,8 @@ def create_job(f: Path, s: dict, move: bool = False, name: str = None, when: flo
            "date": f"{mt:%d.%m.%Y %H:%M}", "ts": mt.timestamp(), "added": time.time(),
            "status": "queued", "done": [], "whisper": s["whisper"], "editor": s["editor"]}
     job.update(extra or {})
+    if before:
+        before(d)
     write_job(d, job)
     return d
 
