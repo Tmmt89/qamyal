@@ -30,7 +30,8 @@ mkdir -p "$ROOT/app/mac" "$ROOT/models" "$ROOT/mac" "$ROOT/bin"
   rsync -a --delete "$SRC/gigaam/" "$ROOT/gigaam/" &&
   cp -f "$SRC/bin/QamyalAudioTap" "$ROOT/app/mac/QamyalAudioTap" &&
   cp -f "$SRC/bin/QamyalCallScout" "$ROOT/app/mac/QamyalCallScout" &&
-  chmod +x "$ROOT/app/mac/QamyalAudioTap" "$ROOT/app/mac/QamyalCallScout"
+  cp -f "$SRC/bin/QamyalScreen" "$ROOT/app/mac/QamyalScreen" &&
+  chmod +x "$ROOT/app/mac/QamyalAudioTap" "$ROOT/app/mac/QamyalCallScout" "$ROOT/app/mac/QamyalScreen"
 } >>"$LOG" 2>&1 || die "Не получилось скопировать программу в $ROOT."
 # файлы пришли из скачанного образа: снимаем метку «из интернета», иначе macOS не даст запустить помощника звука
 xattr -dr com.apple.quarantine "$ROOT" 2>/dev/null

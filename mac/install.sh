@@ -57,6 +57,8 @@ swiftc -O -target "$TARGET" "$ROOT/mac/QamyalAudioTap.swift" -o "$ROOT/app/mac/Q
 codesign --force --sign - "$ROOT/app/mac/QamyalAudioTap"
 swiftc -O -target "$TARGET" "$ROOT/mac/QamyalCallScout.swift" -o "$ROOT/app/mac/QamyalCallScout"
 codesign --force --sign - "$ROOT/app/mac/QamyalCallScout"
+swiftc -O -target "$TARGET" "$ROOT/mac/QamyalScreen.swift" -o "$ROOT/app/mac/QamyalScreen" -framework AppKit -framework AVFoundation -framework CoreMedia -framework ScreenCaptureKit   # запись экрана и рамка
+codesign --force --sign - "$ROOT/app/mac/QamyalScreen"
 
 step "6/7 Приложение Qamyal.app"
 BUILD="$(mktemp -d)"

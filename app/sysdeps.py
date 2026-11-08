@@ -378,11 +378,22 @@ def default_threads() -> int:
     return 2
 
 
-# ---------- запись экрана (ffmpeg) ----------
+# ---------- запись экрана: Windows — ffmpeg, macOS — помощник QamyalScreen (ScreenCaptureKit) ----------
+
+MAC_SCREEN = Path(__file__).with_name("mac") / "QamyalScreen"     # собирает install.sh / setup.sh из mac/QamyalScreen.swift
+
 
 def screen_supported() -> bool:
-    """Запись экрана пока есть только в Windows; на Mac нужен ScreenCaptureKit и разрешение «Запись экрана»."""
-    return IS_WIN
+    """Windows — ffmpeg; macOS — помощник QamyalScreen (разрешение «Запись экрана» macOS спросит сама)."""
+    return IS_WIN or (IS_MAC and MAC_SCREEN.exists())
+
+
+def screen_helper(height: int, fps: int, quality: int):
+    """macOS: команда помощника без имени файла. Он и снимает экран, и рисует рамку, и понимает «q» в stdin,
+    и пишет «out_time_us=…» в stdout — как ffmpeg в Windows. В Windows — None."""
+    if not IS_MAC:
+        return None
+    return [str(MAC_SCREEN), "--fps", str(fps), "--height", str(height), "--quality", str(quality)]
 
 
 def screen_monitors() -> list:

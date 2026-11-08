@@ -37,6 +37,8 @@ swiftc -O -target "$TARGET" "$KIT/mac/QamyalAudioTap.swift" -o "$P/bin/QamyalAud
 codesign --force --sign - "$P/bin/QamyalAudioTap"
 swiftc -O -target "$TARGET" "$KIT/mac/QamyalCallScout.swift" -o "$P/bin/QamyalCallScout"   # кто говорит в окнах Zoom, Teams…
 codesign --force --sign - "$P/bin/QamyalCallScout"
+swiftc -O -target "$TARGET" "$KIT/mac/QamyalScreen.swift" -o "$P/bin/QamyalScreen" -framework AppKit -framework AVFoundation -framework CoreMedia -framework ScreenCaptureKit   # запись экрана и рамка
+codesign --force --sign - "$P/bin/QamyalScreen"
 swiftc -O -target "$TARGET" "$KIT/mac/QamyalApp.swift" -o "$A/Contents/MacOS/Qamyal" -framework Cocoa -framework WebKit
 ICONSET="$TMP/qamyal.iconset"
 mkdir "$ICONSET"

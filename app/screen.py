@@ -11,8 +11,8 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from sysdeps import (HIDDEN, find_program, hide_screen_frame, kill_with_parent, screen_encoders, screen_inputs,
-                     show_screen_frame)
+from sysdeps import (HIDDEN, find_program, hide_screen_frame, kill_with_parent, screen_encoders, screen_helper,
+                     screen_inputs, show_screen_frame)
 
 # высота кадра (0 — как у экрана), кадров в секунду, качество сжатия (меньше — лучше и тяжелее)
 QUALITY = {"low": (720, 5, 30), "normal": (1080, 15, 27), "high": (0, 30, 23)}
@@ -30,6 +30,9 @@ def ffmpeg() -> str:
 
 def _variants(quality: str, monitor: int) -> list:
     h, fps, q = QUALITY.get(quality, QUALITY["normal"])
+    helper = screen_helper(h, fps, q)
+    if helper:                       # macOS: свой помощник, пробовать нечего
+        return [helper]
     scale = f"scale=-2:'min({h},ih)'," if h else ""
     out = []
     for inp, pre in screen_inputs(fps, monitor):
@@ -56,11 +59,17 @@ def _probe(args: list) -> bool:
         return True
 
 
+def _is_helper(args: list) -> bool:
+    """Команда — свой помощник (macOS), а не аргументы для ffmpeg."""
+    return bool(args) and not args[0].startswith("-")
+
+
 def pick(quality: str, monitor: int) -> list:
     """Рабочий способ съёмки запоминаем; неудачу — нет (экран мог быть заблокирован, позже получится)."""
     key = (quality, monitor)
     if key not in _works:
-        found = next((a for a in _variants(quality, monitor) if _probe(a)), None)
+        vs = _variants(quality, monitor)
+        found = vs[0] if vs and _is_helper(vs[0]) else next((a for a in vs if _probe(a)), None)
         if not found:
             raise RuntimeError("не удалось начать съёмку экрана")
         _works[key] = found
@@ -109,15 +118,16 @@ class ScreenRecorder:
 
     def _start(self, settle: float) -> None:
         self.args = self.args or pick(self.quality, self.monitor)
-        f = self.base.with_name(f"{self.base.stem}.screen-{len(self.segments) + 1}.mkv")
         a = self.args
+        helper = _is_helper(a)
+        f = self.base.with_name(f"{self.base.stem}.screen-{len(self.segments) + 1}.{'mov' if helper else 'mkv'}")
         log = self.base.with_suffix(".screen.log")
-        with open(log, "ab") as err:          # ошибки ffmpeg — в файл: труба за час записи могла бы переполниться
-            # каждый кадр сразу на диск, блоки mkv — по 2 с: если ffmpeg упадёт, потеряется не больше 2 с
-            p = subprocess.Popen([ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", *a,
-                                  "-flush_packets", "1", "-cluster_time_limit", "2000",
-                                  "-progress", "pipe:1", "-stats_period", "0.1", str(f)],
-                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err, **HIDDEN)
+        # каждый кадр сразу на диск, блоки — по 2 с: если ffmpeg (помощник) упадёт, потеряется не больше 2 с
+        cmd = [*a, str(f)] if helper else [ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", *a,
+                                           "-flush_packets", "1", "-cluster_time_limit", "2000",
+                                           "-progress", "pipe:1", "-stats_period", "0.1", str(f)]
+        with open(log, "ab") as err:          # ошибки — в файл: труба за час записи могла бы переполниться
+            p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err, **HIDDEN)
         kill_with_parent(p)          # Qamyal упала — ffmpeg не должен писать экран дальше
         first = threading.Event()
         seg = {"file": f.name, "v0": None}
@@ -207,9 +217,13 @@ def attach(audio: Path, job: Path) -> bool:
     return True
 
 
+def ffprobe() -> str:
+    return find_program("ffprobe") or str(Path(ffmpeg()).with_name(Path(ffmpeg()).name.replace("ffmpeg", "ffprobe")))
+
+
 def duration(path: Path) -> float:
     """Длина видео, с. У куска, который ffmpeg не успел закрыть (упал), длины в заголовке нет — тогда по последнему кадру."""
-    probe = find_program("ffprobe") or str(Path(ffmpeg()).with_name(Path(ffmpeg()).name.replace("ffmpeg", "ffprobe")))
+    probe = ffprobe()
     r = subprocess.run([probe, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
                        capture_output=True, text=True, **HIDDEN)
     try:
@@ -298,44 +312,53 @@ def to_record(x: float, vmap: list) -> float:
 def keyframes(job: Path, vmap: list, progress=lambda p: None) -> list:
     """Кадры, где сменился экран (новый слайд, другое окно): [{"t": секунда записи, "file": "кадры/….jpg"}].
     Смотрим только опорные кадры видео (раз в 2 с) — это быстро. Кадр берём, когда картинка заметно
-    отличается от последнего сохранённого и уже не меняется (анимация перехода закончилась)."""
-    import av
+    отличается от последнего сохранённого и уже не меняется (анимация перехода закончилась).
+    Всё через ffmpeg/ffprobe — без PyAV и Pillow (на Mac их может не быть)."""
     video = job / VIDEO
     out_dir = job / FRAMES
     shutil.rmtree(out_dir, ignore_errors=True)
     out_dir.mkdir()
-    out = []
-    with av.open(str(video)) as c:
-        st = c.streams.video[0]
-        st.codec_context.skip_frame = "NONKEY"
-        total = float(st.duration * st.time_base) if st.duration else 0
-        saved = prev = None
-        pend_t = None
-        for frame in c.decode(st):
-            t = float(frame.time or 0)
-            small = frame.reformat(width=96, height=54, format="gray").to_ndarray().astype(np.int16)
-            differs = saved is None or (np.abs(small - saved) > 24).mean() > 0.03
-            stable = prev is not None and (np.abs(small - prev) > 24).mean() < 0.005
-            prev = small
-            if not differs:
-                pend_t = None
-                continue
-            pend_t = t if pend_t is None else pend_t
-            # видео или прокрутка: картинка не успокаивается — всё равно сохраняем, но не чаще раза в 30 с
-            if not (saved is None or stable or t - pend_t >= 30):
-                continue
-            img = frame.to_image()
-            if img.width > 1280:
-                img = img.resize((1280, round(img.height * 1280 / img.width)))
-            rt = round(to_record(pend_t, vmap), 1)
-            name = f"{len(out) + 1:03d}.jpg"
-            img.save(out_dir / name, quality=80)
-            out.append({"t": rt, "file": f"{FRAMES}/{name}"})
-            saved, pend_t = small, None
-            if total:
-                progress(90 + 10 * t / total)
-            if len(out) >= MAX_FRAMES:
-                break
+    W, H = 96, 54
+    r = subprocess.run([ffprobe(), "-v", "error", "-skip_frame", "nokey", "-select_streams", "v:0",
+                        "-show_entries", "frame=pts_time", "-of", "csv=p=0", str(video)],
+                       capture_output=True, text=True, **HIDDEN)
+    times = []
+    for line in r.stdout.split():
+        try:
+            times.append(float(line.strip(",")))
+        except ValueError:
+            pass
+    raw = subprocess.run([ffmpeg(), "-v", "error", "-nostdin", "-skip_frame", "nokey", "-i", str(video),
+                          "-vf", f"scale={W}:{H},format=gray", "-fps_mode", "passthrough", "-f", "rawvideo", "-"],
+                         capture_output=True, **HIDDEN).stdout
+    smalls = np.frombuffer(raw, dtype=np.uint8)[:len(raw) // (W * H) * W * H].reshape(-1, H, W).astype(np.int16)
+    n = min(len(times), len(smalls))
+    total = times[n - 1] if n else 0
+    out, saved, prev, pend_t = [], None, None, None
+    for k in range(n):
+        t, small = times[k], smalls[k]
+        differs = saved is None or (np.abs(small - saved) > 24).mean() > 0.03
+        stable = prev is not None and (np.abs(small - prev) > 24).mean() < 0.005
+        prev = small
+        if not differs:
+            pend_t = None
+            continue
+        pend_t = t if pend_t is None else pend_t
+        # видео или прокрутка: картинка не успокаивается — всё равно сохраняем, но не чаще раза в 30 с
+        if not (saved is None or stable or t - pend_t >= 30):
+            continue
+        name = f"{len(out) + 1:03d}.jpg"
+        subprocess.run([ffmpeg(), "-v", "error", "-nostdin", "-y", "-ss", f"{t:.3f}", "-i", str(video),
+                        "-frames:v", "1", "-vf", "scale='min(1280,iw)':-2", "-q:v", "4", str(out_dir / name)],
+                       capture_output=True, **HIDDEN)
+        if not (out_dir / name).exists():
+            continue
+        out.append({"t": round(to_record(pend_t, vmap), 1), "file": f"{FRAMES}/{name}"})
+        saved, pend_t = small, None
+        if total:
+            progress(90 + 10 * t / total)
+        if len(out) >= MAX_FRAMES:
+            break
     if not out:
         shutil.rmtree(out_dir, ignore_errors=True)
     return out
