@@ -44,6 +44,12 @@ def sections(res: dict) -> list:
     return out
 
 
+def shot_caption(f: dict, res: dict) -> str:
+    """«Экран, 12:34 — что на экране» (подпись Claude из краткого содержания, если есть)."""
+    what = (res.get("screens") or {}).get(f["file"].rsplit("/", 1)[-1], "")
+    return f"Экран, {fmt_time(f['t'])}" + (f" — {what}" if what else "")
+
+
 def frames_by_turn(turns: list, frames: list) -> dict:
     """Кадр экрана ставим перед репликой, во время которой он появился: {номер реплики: [кадры]}."""
     out = {}
@@ -81,7 +87,7 @@ def write_docx(res: dict, path: Path, frames: list = None) -> None:
             img = path.parent / f["file"]
             if img.exists():
                 doc.add_picture(str(img), width=Cm(16))
-                cap = doc.add_paragraph().add_run(f"Экран, {fmt_time(f['t'])}")
+                cap = doc.add_paragraph().add_run(shot_caption(f, res))
                 cap.font.size, cap.font.color.rgb = Pt(9), RGBColor(0x88, 0x88, 0x88)
         p = doc.add_paragraph()
         r = p.add_run(f"[{fmt_time(t['t'])}] ")
@@ -146,8 +152,8 @@ def write_html(res: dict, path: Path, video: list = None, frames: list = None) -
 
     def shot(f):
         return (f'<figure class="shot" data-t="{f["t"]:.1f}"><img loading="lazy" src="{e(f["file"])}" '
-                f'alt="Экран, {fmt_time(f["t"])}" title="Показать видео с этого места">'
-                f'<figcaption>Экран, {fmt_time(f["t"])}</figcaption></figure>')
+                f'alt="{e(shot_caption(f, res))}" title="Показать видео с этого места">'
+                f'<figcaption>{e(shot_caption(f, res))}</figcaption></figure>')
     secs = "".join(f"<h2>{e(title)}</h2><ul>{''.join(f'<li>{e(i)}</li>' for i in items)}</ul>"
                    for title, items in sections(res) if items)
     turns = "\n".join(

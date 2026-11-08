@@ -942,8 +942,17 @@ function jobDone(id, data, q) {
     </div></div>`;
 
   /* --- текст --- */
+  // кадры записи экрана: каждый — перед репликой, во время которой он появился
+  const shotsAt = {};
+  (data.frames || []).forEach(f => {
+    let k = 0;
+    turns.forEach((t, i) => { if (t.t <= f.t + 0.5) k = i; });
+    (shotsAt[k] = shotsAt[k] || []).push(f);
+  });
+  const shotHtml = i => (shotsAt[i] || []).map(f => `<figure class="shot" data-seek="${f.t}" title="Слушать с этого места">
+      <img loading="lazy" src="${f.src}" alt=""><figcaption>${esc(f.caption)}</figcaption></figure>`).join('');
   function renderTurns() {
-    $('#tr').innerHTML = turns.map((t, i) => `<div class="turn${filter && t.who !== filter ? ' hidden' : ''}" data-i="${i}">
+    $('#tr').innerHTML = turns.map((t, i) => (filter ? '' : shotHtml(i)) + `<div class="turn${filter && t.who !== filter ? ' hidden' : ''}" data-i="${i}">
       <button class="ts" data-seek="${t.t}">${fmtT(t.t)}</button>
       <div>${starAt.has(i) ? `<span class="star" title="Отмеченный момент">★</span>` : ''}<span class="who" style="--c:${col(t.who)}" data-who="${esc(t.who)}">${esc(t.who)}</span><span class="tx">${esc(t.text)}</span></div></div>`).join('');
     renderPeople();

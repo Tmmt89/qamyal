@@ -42,20 +42,49 @@ def summary_prompt(text: str) -> str:
     return (f"ПРОЕКТЫ:\n{projects_block()}\n\nСЛОВАРЬ:\n{read_glossary().strip()}\n\nРАСШИФРОВКА:\n{text}")
 
 
+SCREENS_MAX = 40          # больше кадров Claude не показываем: дорого и долго
+
+
+def screens_block(job_dir: Path) -> tuple:
+    """Кадры записи экрана для краткого содержания: (текст для запроса, папка с кадрами) или ("", None)."""
+    try:
+        frames = json.loads((job_dir / "job.json").read_text(encoding="utf-8")).get("frames") or []
+    except (OSError, ValueError):
+        return "", None
+    frames = [f for f in frames if (job_dir / f["file"]).exists()]
+    if not frames:
+        return "", None
+    if len(frames) > SCREENS_MAX:                     # равномерно по всей записи
+        step = len(frames) / SCREENS_MAX
+        frames = [frames[int(i * step)] for i in range(SCREENS_MAX)]
+    listing = "\n".join(f"[{fmt_time(f['t'])}] {job_dir / f['file']}" for f in frames)
+    text = ("\n\nЭКРАН: во время разговора записывался экран. Вот кадры в моменты, когда он менялся "
+            "(слайды презентации, окна программ), со временем появления:\n"
+            f"{listing}\n"
+            "Открой их инструментом Read. Учитывай, что было на экране, в кратком содержании, решениях и задачах — "
+            "когда это помогает понять разговор (о каком слайде, ошибке или окне шла речь). Отдельно кадры не пересказывай. "
+            'Добавь в ответ поле "screens": {"имя файла, например 001.jpg": "что на экране, до 12 слов"} — '
+            "для каждого кадра из списка.")
+    return text, job_dir / frames[0]["file"].split("/")[0]
+
+
 class EditorError(RuntimeError):
     pass
 
 
 # ---------- вызов модели ----------
 
-def call_claude(system: str, prompt: str, s: dict) -> str:
+def call_claude(system: str, prompt: str, s: dict, look: Path = None) -> str:
+    """look — папка с картинками, которые Claude может открыть сам (инструмент Read, только чтение)."""
     exe = find_claude(s)
     if not exe:
         raise EditorError("Не найден Claude Code — установите его или выберите другой вариант в Настройках")
     cwd = APP / "editor_cwd"
     cwd.mkdir(exist_ok=True)
-    cmd = [exe, "-p", "--output-format", "json", "--tools", "", "--no-session-persistence",
+    cmd = [exe, "-p", "--output-format", "json", "--tools", "Read" if look else "", "--no-session-persistence",
            "--system-prompt", system]
+    if look:
+        cmd += ["--allowedTools", "Read", "--add-dir", str(look)]
     if s.get("claude_model"):
         cmd += ["--model", s["claude_model"]]
     try:
@@ -127,12 +156,13 @@ def caller(s: dict):
     return {"openai": call_openai, "codex": call_codex}.get(s["editor"], call_claude)
 
 
-def ask_json(system: str, prompt: str, s: dict) -> dict:
+def ask_json(system: str, prompt: str, s: dict, look: Path = None) -> dict:
     call = caller(s)
+    extra = {"look": look} if look and call is call_claude else {}     # картинки умеет смотреть только Claude Code
     last = ""
     for attempt in range(3):
         text = call(system, prompt if attempt == 0 else
-                    prompt + "\n\nПредыдущий ответ не разобрался как JSON. Ответь строго одним JSON-объектом.", s)
+                    prompt + "\n\nПредыдущий ответ не разобрался как JSON. Ответь строго одним JSON-объектом.", s, **extra)
         try:
             return parse_json(text)
         except ValueError as e:
@@ -212,7 +242,8 @@ def edit(job_dir: Path, job_name: str, a_turns: list, b_turns: list, s: dict, pr
         summary = json.loads(summ_file.read_text(encoding="utf-8"))
     else:
         text = "\n".join(f"[{fmt_time(t['t'])}] {t['who']}: {t['text']}" for t in turns)
-        summary = ask_json(SUMMARY_SYSTEM, summary_prompt(text), s)
+        screens, look = screens_block(job_dir) if s.get("editor", "claude") == "claude" else ("", None)
+        summary = ask_json(SUMMARY_SYSTEM, summary_prompt(text) + screens, s, look=look)
         summ_file.write_text(json.dumps(summary, ensure_ascii=False, indent=1), encoding="utf-8")
     progress(100)
     return {**summary, "turns": turns}

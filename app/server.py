@@ -134,6 +134,15 @@ def media(jid):
     return static_file("запись.mp3", root=str(d), mimetype="audio/mpeg")
 
 
+@app.get("/frame/<jid>/<name>")
+def frame(jid, name):
+    """Кадр записи экрана (папка «кадры» в папке записи)."""
+    d = job_or_404(jid)
+    resp = static_file(name, root=str(d / "кадры"), mimetype="image/jpeg")
+    resp.set_header("Cache-Control", "max-age=86400")
+    return resp
+
+
 # ---------- общее состояние ----------
 
 @app.get("/api/state")
@@ -300,6 +309,11 @@ def job(jid):
     out["qa"] = read_json(d / "черновики" / "вопросы.json", [])
     out["has_audio"] = (d / "запись.mp3").exists()
     out["has_video"] = (d / "видео.mp4").exists()
+    if out["has_video"] and res:
+        import render
+        out["frames"] = [{"t": f["t"], "src": f"/frame/{jid}/{f['file'].rsplit('/', 1)[-1]}",
+                          "caption": render.shot_caption(f, res)}
+                         for f in j.get("frames") or [] if (d / f["file"]).exists()]
     dia = read_json(d / "черновики" / "голоса.json", [])
     if res and dia:
         mapping = voices.full_mapping(dia, res["turns"], read_json(d / "черновики" / "голоса-узнаны.json", {}))      # по текущим именам (после правок)

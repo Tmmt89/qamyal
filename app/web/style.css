@@ -302,6 +302,9 @@ canvas.wave { width: 100%; height: 64px; display: block; cursor: pointer; }
 .turn { display: grid; grid-template-columns: 58px 1fr; gap: 8px; padding: 8px 8px; border-radius: 8px; }
 .turn.now { background: var(--accent-soft); }
 .turn.hidden { display: none; }
+.shot { margin: 6px 8px 6px 74px; cursor: pointer; }
+.shot img { display: block; max-width: min(100%, 560px); border: 1px solid var(--line); border-radius: 8px; }
+.shot figcaption { color: var(--muted); font-size: 12px; margin-top: 3px; }
 .turn .ts { border: 0; background: none; color: var(--muted); font-size: 12.5px; cursor: pointer; text-align: left; padding: 2px 0 0; font-variant-numeric: tabular-nums; }
 .turn .ts:hover { color: var(--accent); }
 .turn .who { font-weight: 650; color: var(--c); cursor: pointer; margin-right: 6px; }
