@@ -228,3 +228,63 @@ def mux(job: Path, wav: Path, anchors: list, progress=lambda p: None) -> list:
     progress(90)
     shutil.rmtree(d, ignore_errors=True)        # видео собрано — куски больше не нужны
     return tl
+
+
+# ---------- кадры: что было на экране, когда менялась картинка ----------
+
+FRAMES = "кадры"
+MAX_FRAMES = 300
+
+
+def to_record(x: float, vmap: list) -> float:
+    """Секунда видео → секунда записи (обратная карта mux)."""
+    for r0, r1, v in vmap:
+        if x < v + r1 - r0:
+            return r0 + max(0.0, x - v)
+    return vmap[-1][1] if vmap else x
+
+
+def keyframes(job: Path, vmap: list, progress=lambda p: None) -> list:
+    """Кадры, где сменился экран (новый слайд, другое окно): [{"t": секунда записи, "file": "кадры/….jpg"}].
+    Смотрим только опорные кадры видео (раз в 2 с) — это быстро. Кадр берём, когда картинка заметно
+    отличается от последнего сохранённого и уже не меняется (анимация перехода закончилась)."""
+    import av
+    video = job / VIDEO
+    out_dir = job / FRAMES
+    shutil.rmtree(out_dir, ignore_errors=True)
+    out_dir.mkdir()
+    out = []
+    with av.open(str(video)) as c:
+        st = c.streams.video[0]
+        st.codec_context.skip_frame = "NONKEY"
+        total = float(st.duration * st.time_base) if st.duration else 0
+        saved = prev = None
+        pend_t = None
+        for frame in c.decode(st):
+            t = float(frame.time or 0)
+            small = frame.reformat(width=96, height=54, format="gray").to_ndarray().astype(np.int16)
+            differs = saved is None or (np.abs(small - saved) > 24).mean() > 0.03
+            stable = prev is not None and (np.abs(small - prev) > 24).mean() < 0.005
+            prev = small
+            if not differs:
+                pend_t = None
+                continue
+            pend_t = t if pend_t is None else pend_t
+            # видео или прокрутка: картинка не успокаивается — всё равно сохраняем, но не чаще раза в 30 с
+            if not (saved is None or stable or t - pend_t >= 30):
+                continue
+            img = frame.to_image()
+            if img.width > 1280:
+                img = img.resize((1280, round(img.height * 1280 / img.width)))
+            rt = round(to_record(pend_t, vmap), 1)
+            name = f"{len(out) + 1:03d}.jpg"
+            img.save(out_dir / name, quality=80)
+            out.append({"t": rt, "file": f"{FRAMES}/{name}"})
+            saved, pend_t = small, None
+            if total:
+                progress(90 + 10 * t / total)
+            if len(out) >= MAX_FRAMES:
+                break
+    if not out:
+        shutil.rmtree(out_dir, ignore_errors=True)
+    return out

@@ -44,9 +44,24 @@ def sections(res: dict) -> list:
     return out
 
 
-def write_docx(res: dict, path: Path) -> None:
+def frames_by_turn(turns: list, frames: list) -> dict:
+    """Кадр экрана ставим перед репликой, во время которой он появился: {номер реплики: [кадры]}."""
+    out = {}
+    for f in frames or []:
+        k = 0
+        for i, t in enumerate(turns):
+            if t["t"] <= f["t"] + 0.5:
+                k = i
+            else:
+                break
+        out.setdefault(k, []).append(f)
+    return out
+
+
+def write_docx(res: dict, path: Path, frames: list = None) -> None:
+    """frames — кадры записи экрана [{t, file}], пути от папки записи."""
     from docx import Document
-    from docx.shared import Pt, RGBColor
+    from docx.shared import Cm, Pt, RGBColor
 
     doc = Document()
     st = doc.styles["Normal"]
@@ -60,7 +75,14 @@ def write_docx(res: dict, path: Path) -> None:
             for it in items:
                 doc.add_paragraph(it, style="List Bullet")
     doc.add_heading("Расшифровка", level=2)
-    for t in res["turns"]:
+    shots = frames_by_turn(res["turns"], frames)
+    for i, t in enumerate(res["turns"]):
+        for f in shots.get(i, []):
+            img = path.parent / f["file"]
+            if img.exists():
+                doc.add_picture(str(img), width=Cm(16))
+                cap = doc.add_paragraph().add_run(f"Экран, {fmt_time(f['t'])}")
+                cap.font.size, cap.font.color.rgb = Pt(9), RGBColor(0x88, 0x88, 0x88)
         p = doc.add_paragraph()
         r = p.add_run(f"[{fmt_time(t['t'])}] ")
         r.font.color.rgb = RGBColor(0x88, 0x88, 0x88)
@@ -85,13 +107,15 @@ audio{{width:100%;height:36px}}
 .media{{display:flex;gap:8px;align-items:center}} .media audio{{flex:1}}
 .vbtn{{font:inherit;font-size:14px;padding:6px 12px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg);cursor:pointer}}
 .vbtn.on{{background:var(--accent);border-color:var(--accent);color:#fff}}
-video{{display:block;width:100%;max-height:45vh;background:#000;border-radius:6px;margin-top:8px}}
+video{{display:block;width:100%;max-height:45vh;background:#000;border-radius:6px;margin-top:8px}} video[hidden]{{display:none}}
 main{{max-width:860px;margin:0 auto;padding:8px 16px 80px}}
 h2{{font-size:16px;margin:24px 0 6px}} ul{{margin:0;padding-left:22px}}
 .turn{{display:grid;grid-template-columns:56px 1fr;gap:8px;padding:6px 8px;border-radius:6px}}
 .turn.now{{background:var(--now)}}
 .ts{{color:var(--accent);font-size:13px;padding-top:2px;cursor:pointer;text-decoration:none;font-variant-numeric:tabular-nums}}
 .who{{font-weight:600}}
+.shot{{margin:10px 0 10px 64px}} .shot img{{display:block;max-width:100%;border:1px solid var(--line);border-radius:6px;cursor:pointer}}
+.shot figcaption{{color:var(--muted);font-size:12px;margin-top:3px}}
 </style></head><body>
 <header><h1>{title}</h1><div class="meta">{meta}</div><div class="media"><audio id="a" controls preload="metadata" src="запись.mp3"></audio>{vbtn}</div>{video}</header>
 <main>{sections}<h2>Расшифровка</h2>
@@ -106,6 +130,7 @@ const fromV=x=>{{for(const [r0,r1,y] of M)if(x<y+r1-r0)return r0+Math.max(0,x-y)
 let m=a;const now=()=>m===v?fromV(v.currentTime):a.currentTime;
 const seek=(t,play)=>{{if(m===v)v.currentTime=toV(t);else a.currentTime=t;if(play)m.play();}};
 document.querySelectorAll('.ts').forEach(x=>x.onclick=e=>{{e.preventDefault();seek(+x.closest('.turn').dataset.t,true);}});
+document.querySelectorAll('.shot img').forEach(x=>x.onclick=()=>{{const t=+x.closest('.shot').dataset.t;if(vb&&m!==v)vb.click();seek(t,true);}});
 if(vb)vb.onclick=()=>{{const t=now(),go=!m.paused;m.pause();m=m===a?v:a;v.hidden=m!==v;vb.classList.toggle('on',m===v);seek(t,go);}};
 let cur=-1;const upd=e=>{{if(e.target!==m)return;const t=now();let i=-1;for(let k=0;k<ts.length&&ts[k]<=t+0.3;k++)i=k;
 if(i!==cur){{if(cur>=0)rows[cur].classList.remove('now');if(i>=0){{rows[i].classList.add('now');if(!m.paused)rows[i].scrollIntoView({{block:'center',behavior:'smooth'}});}}cur=i;}}}};
@@ -113,15 +138,23 @@ a.ontimeupdate=upd;if(v)v.ontimeupdate=upd;
 </script></body></html>"""
 
 
-def write_html(res: dict, path: Path, video: list = None) -> None:
-    """video — карта «время записи → время видео», если рядом лежит видео.mp4 (запись экрана)."""
+def write_html(res: dict, path: Path, video: list = None, frames: list = None) -> None:
+    """video — карта «время записи → время видео», если рядом лежит видео.mp4 (запись экрана);
+    frames — кадры экрана [{t, file}], встают перед репликами."""
     e = html.escape
+    shots = frames_by_turn(res["turns"], frames)
+
+    def shot(f):
+        return (f'<figure class="shot" data-t="{f["t"]:.1f}"><img loading="lazy" src="{e(f["file"])}" '
+                f'alt="Экран, {fmt_time(f["t"])}" title="Показать видео с этого места">'
+                f'<figcaption>Экран, {fmt_time(f["t"])}</figcaption></figure>')
     secs = "".join(f"<h2>{e(title)}</h2><ul>{''.join(f'<li>{e(i)}</li>' for i in items)}</ul>"
                    for title, items in sections(res) if items)
     turns = "\n".join(
+        "".join(shot(f) for f in shots.get(i, [])) +
         f'<div class="turn" data-t="{t["t"]:.1f}"><a class="ts" href="#">{fmt_time(t["t"])}</a>'
         f'<div><span class="who">{e(t["who"])}:</span> {e(t["text"])}</div></div>'
-        for t in res["turns"])
+        for i, t in enumerate(res["turns"]))
     has_video = video is not None
     path.write_text(PAGE.format(
         title=e(res["title"]), meta=e(meta_line(res)), sections=secs, turns=turns,
@@ -165,11 +198,13 @@ def render(job_dir: Path, res: dict) -> None:
                 old.unlink()
             except OSError:
                 pass                                # открыт в Word — оставляем как есть
-    write_docx(res, new["docx"])
-    video = None
+    video, frames = None, None
     if (job_dir / "видео.mp4").exists():
         from common import read_job
-        video = read_job(job_dir).get("video_map") or []
-    write_html(res, new["html"], video)
+        j = read_job(job_dir)
+        video = j.get("video_map") or []
+        frames = [f for f in j.get("frames") or [] if (job_dir / f["file"]).exists()]
+    write_docx(res, new["docx"], frames)
+    write_html(res, new["html"], video, frames)
     (job_dir / "черновики" / "файлы.json").write_text(
         json.dumps({k: p.name for k, p in new.items()}, ensure_ascii=False), encoding="utf-8")

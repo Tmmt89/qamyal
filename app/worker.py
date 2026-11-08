@@ -100,7 +100,13 @@ def process(d: Path, s: dict) -> None:
             meta = read_json(drafts / "экран" / screen.META, {})
             v0 = next((x["v0"] for x in meta.get("segments", []) if x.get("v0")), 0)
             anchors = [[0.0, v0]]
-        update_job(d, video_map=screen.mux(d, wav, anchors, progress))
+        vmap = screen.mux(d, wav, anchors, progress)
+        update_job(d, video_map=vmap)
+        if (d / screen.VIDEO).exists():
+            try:
+                update_job(d, frames=screen.keyframes(d, vmap, progress))
+            except Exception as e:  # noqa: BLE001 — без кадров итог всё равно нужен
+                log.warning("кадры экрана не выбраны: %s", e)
 
     def gigaam(progress):
         write_json(drafts / "gigaam.json", asr.run_gigaam(audio(), s["threads"], progress))
