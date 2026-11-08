@@ -87,8 +87,11 @@ class ScreenRecorder:
         return self.base.with_suffix(".screen.json")
 
     def _save(self):
-        self.meta_path.write_text(json.dumps({"quality": self.quality, "segments": self.segments},
-                                             ensure_ascii=False), encoding="utf-8")
+        """Атомарно: файл не бывает записан наполовину. Временный — с точкой в начале, чтобы leftovers() его не взял."""
+        tmp = self.meta_path.with_name("." + self.meta_path.name + ".tmp")
+        tmp.write_text(json.dumps({"quality": self.quality, "segments": self.segments},
+                                  ensure_ascii=False), encoding="utf-8")
+        tmp.replace(self.meta_path)
 
     def start(self, settle: float = 3.0) -> None:
         """Новый кусок. Ждём первый кадр не дольше settle секунд: Desktop Duplication отдаёт его только когда
@@ -129,8 +132,9 @@ class ScreenRecorder:
                     if us > 0:
                         seg["v0"] = round(time.time() - us / 1e6, 3)
                         first.set()
-                        if seg in self.segments:
-                            self._save()
+                        with self.lock:      # stop() тоже пишет файл — не одновременно
+                            if seg in self.segments:
+                                self._save()
 
         threading.Thread(target=watch, daemon=True).start()
         first.wait(settle)
@@ -191,6 +195,8 @@ def attach(audio: Path, job: Path) -> bool:
     for f in files:
         if f.suffix == ".log":
             f.unlink(missing_ok=True)
+            continue
+        if f.suffix != ".json" and ".screen-" not in f.name:      # чужой файл — не трогаем
             continue
         name = META if f.suffix == ".json" else f.name.split(".screen-")[1]     # «1.mkv»
         shutil.move(str(f), str(d / name))

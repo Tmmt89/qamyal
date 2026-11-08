@@ -263,9 +263,11 @@ def create_job(f: Path, s: dict, move: bool = False, name: str = None, when: flo
            "date": f"{mt:%d.%m.%Y %H:%M}", "ts": mt.timestamp(), "added": time.time(),
            "status": "queued", "done": [], "whisper": s["whisper"], "editor": s["editor"]}
     job.update(extra or {})
-    if before:
-        before(d)
-    write_job(d, job)
+    try:
+        if before:
+            before(d)
+    finally:                 # исходник уже в папке — без job.json очередь его не увидит и запись пропадёт
+        write_job(d, job)
     return d
 
 

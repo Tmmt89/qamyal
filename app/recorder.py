@@ -222,7 +222,7 @@ class Recorder:
             import screen
             try:
                 screen.attach(audio, job)
-            except OSError as e:          # файл занят — звук важнее: задание всё равно ставим в очередь
+            except Exception as e:  # noqa: BLE001 — файл занят или испорчен: звук важнее, задание всё равно в очередь
                 self.error = f"Экран: {e}"
         return go
 
@@ -256,58 +256,73 @@ class Recorder:
                 return None
             self.state = "saving"
             self.running = False
-            for t in self.threads:
-                t.join(timeout=3)
-            self.file.close()
-            if self.screen:
-                self.screen.stop(final=True)
-            skype_log = self._stop_skype_probe()
-            scout_log = self._stop_scout()
-            hints_log = self.path.with_suffix(".hints.jsonl")
-            dom_log = self.path.with_suffix(".domscout.jsonl")
-            live_segs = self.live.stop() if self.live else []
-            PAUSE.unlink(missing_ok=True)
             job = None
-            dur = self.frames / SR
-            if discard or dur < 1.0:
-                self.path.unlink(missing_ok=True)
-                if self.screen:
-                    import screen
-                    for f in screen.leftovers(self.path):
-                        f.unlink(missing_ok=True)
-                if skype_log:
-                    skype_log.unlink(missing_ok=True)
-                if scout_log:
-                    scout_log.unlink(missing_ok=True)
-                hints_log.unlink(missing_ok=True)
-                dom_log.unlink(missing_ok=True)
-            else:
-                s = load_settings()
-                when = datetime.fromtimestamp(self.started)
-                title = self.name or (f"Созвон · {SERVICES[self.service]} {when:%d.%m %H-%M}" if self.service
-                                      else f"Запись {when:%d.%m %H-%M}")
-                extra = {"marks": self.marks, "recorded": self.source, "num_speakers": self.speakers,
-                         "service": self.service, "rec_t0": self.t0, "rec_anchors": self.anchors}
-                audio = Path(self.path)
-                if self.screen and self.screen.segments:
-                    extra["screen"] = self.screen.quality
-                job = create_job(audio, s, move=True, name=title, when=self.started, extra=extra,
-                                 before=self._attach_screen(audio))
-                if live_segs:
-                    write_json(job / "черновики" / "живая.json", live_segs)
-                if skype_log and skype_log.exists():
-                    os.replace(skype_log, job / "черновики" / "skype.jsonl")
-                if scout_log and scout_log.exists():
-                    os.replace(scout_log, job / "черновики" / "разведка-окон.jsonl")
-                if hints_log.exists():
-                    os.replace(hints_log, job / "черновики" / "говорящие.jsonl")
-                if dom_log.exists():
-                    os.replace(dom_log, job / "черновики" / "разведка-браузера.jsonl")
-                spawn_worker()
-            self.state = "idle"
-            self.last_job = job
-            self.live = None                     # процесс живой расшифровки завершён — его память вернулась системе
+            try:
+                job = self._finish(discard)
+            except Exception as e:  # noqa: BLE001 — диктофон не должен застрять в «saving»; звук остаётся в .incoming
+                self.error = f"Не удалось сохранить запись: {e}"
+            finally:
+                self.state = "idle"
+                self.last_job = job
+                self.live = None                 # процесс живой расшифровки завершён — его память вернулась системе
             return job
+
+    def _finish(self, discard: bool):
+        """Закрывает всё, что писало запись, и ставит её в очередь. Вызывается из stop() под self.lock."""
+        for t in self.threads:
+            t.join(timeout=3)
+        self.file.close()
+        if self.screen:
+            self._quietly(lambda: self.screen.stop(final=True))
+        skype_log = self._quietly(self._stop_skype_probe)
+        scout_log = self._quietly(self._stop_scout)
+        hints_log = self.path.with_suffix(".hints.jsonl")
+        dom_log = self.path.with_suffix(".domscout.jsonl")
+        live_segs = (self._quietly(self.live.stop) if self.live else None) or []
+        PAUSE.unlink(missing_ok=True)
+        job = None
+        dur = self.frames / SR
+        if discard or dur < 1.0:
+            self.path.unlink(missing_ok=True)
+            if self.screen:
+                import screen
+                for f in screen.leftovers(self.path):
+                    f.unlink(missing_ok=True)
+            if skype_log:
+                skype_log.unlink(missing_ok=True)
+            if scout_log:
+                scout_log.unlink(missing_ok=True)
+            hints_log.unlink(missing_ok=True)
+            dom_log.unlink(missing_ok=True)
+        else:
+            s = load_settings()
+            when = datetime.fromtimestamp(self.started)
+            title = self.name or (f"Созвон · {SERVICES[self.service]} {when:%d.%m %H-%M}" if self.service
+                                  else f"Запись {when:%d.%m %H-%M}")
+            extra = {"marks": self.marks, "recorded": self.source, "num_speakers": self.speakers,
+                     "service": self.service, "rec_t0": self.t0, "rec_anchors": self.anchors}
+            audio = Path(self.path)
+            if self.screen and self.screen.segments:
+                extra["screen"] = self.screen.quality
+            job = create_job(audio, s, move=True, name=title, when=self.started, extra=extra,
+                             before=self._attach_screen(audio))
+            dr = job / "черновики"            # задание уже в очереди — подсказки к нему необязательны
+            if live_segs:
+                self._quietly(lambda: write_json(dr / "живая.json", live_segs))
+            for log, name in ((skype_log, "skype.jsonl"), (scout_log, "разведка-окон.jsonl"),
+                              (hints_log, "говорящие.jsonl"), (dom_log, "разведка-браузера.jsonl")):
+                if log and log.exists():
+                    self._quietly(lambda log=log, name=name: os.replace(log, dr / name))
+            spawn_worker()
+        return job
+
+    def _quietly(self, fn):
+        """Необязательный шаг сохранения: сбой запоминаем для окна, но запись всё равно ставим в очередь."""
+        try:
+            return fn()
+        except Exception as e:  # noqa: BLE001
+            self.error = self.error or f"При сохранении: {e}"
+            return None
 
     # ---------- Skype для бизнеса: кто говорит (официальный Lync SDK) ----------
 
@@ -509,9 +524,15 @@ def recover_orphans() -> list:
                 continue
             when = datetime.strptime(f.stem[4:], "%Y%m%d-%H%M%S").timestamp()
             import screen
+
+            def attach(d, f=f):
+                try:
+                    screen.attach(f, d)
+                except Exception:  # noqa: BLE001 — испорченный экран не должен мешать восстановить звук
+                    pass
             job = create_job(f, s, move=True, name="Восстановленная запись", when=when,
                              extra={"recorded": "recovered"},       # якорей звука нет — видео склеится по времени файла
-                             before=lambda d, f=f: screen.attach(f, d))
+                             before=attach)
             out.append(job)
         except (OSError, ValueError):
             pass

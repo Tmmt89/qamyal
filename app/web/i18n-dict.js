@@ -97,6 +97,8 @@ const I18N_ROWS = [
   ['Монитор {n}', 'Monitor {n}', 'Монитор {n}'],
   ['экран', 'screen', 'экран'],
   ['Экран: {x}', 'Screen: {x}', 'Экран: {x}'],
+  ['Не удалось сохранить запись: {x}', 'Could not save the recording: {x}', 'ДӀаяздар Ӏалаш ца делла: {x}'],
+  ['При сохранении: {x}', 'While saving: {x}', 'Ӏалашдеш: {x}'],
   ['не удалось начать съёмку экрана', 'could not start screen capture', 'экран дӀаяздан ца делира'],
   ['экран не записывается', 'the screen is not being recorded', 'экран дӀа ца яздало'],
   ['экран не записывается: {x}', 'the screen is not being recorded: {x}', 'экран дӀа ца яздало: {x}'],
