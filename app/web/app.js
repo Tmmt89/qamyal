@@ -473,6 +473,7 @@ function pageRec() {
       <div class="rec-actions">
         <button class="btn" id="pz"></button>
         <button class="btn" id="mk">${icon('star')}Отметить момент <kbd>M</kbd></button>
+        ${scr.supported ? `<button class="btn" id="scrbtn"></button>` : ''}
         <span class="grow"></span>
         <button class="btn ghost sm danger" id="cancel" title="Удалить запись, не сохраняя">${icon('trash')}Удалить</button>
       </div>
@@ -481,6 +482,14 @@ function pageRec() {
     $('#cancel').onclick = () => { if (confirm('Удалить эту запись без сохранения?')) stop(true); };
     $('#mk').onclick = mark;
     $('#pz').onclick = () => api('/api/rec/' + ($('#pz').dataset.s === 'paused' ? 'resume' : 'pause'), {}).then(tick).catch(fail);
+    if ($('#scrbtn')) $('#scrbtn').onclick = async () => {
+      const on = $('#scrbtn').dataset.on !== '1';
+      $('#scrbtn').disabled = true;
+      try { await api('/api/rec/screen', { on, quality: cfg.rec_screen_quality || 'normal', monitor: cfg.rec_screen_monitor || 0 }); }
+      catch (e) { fail(e); }
+      $('#scrbtn').disabled = false;
+      tick();
+    };
     $('#rs').classList.toggle('tip', !st.live);
     $('#rs').innerHTML = st.live
       ?`<div class="live-head"><h2 style="margin:0">Живая расшифровка</h2><span class="grow"></span><span class="small muted" id="lag"></span></div>
@@ -522,6 +531,13 @@ function pageRec() {
     const pz = $('#pz');
     pz.dataset.s = st.state;
     pz.innerHTML = st.state === 'paused' ? `${icon('play')}Продолжить` : `${icon('pause')}Пауза`;
+    const sb = $('#scrbtn');
+    if (sb) {
+      sb.dataset.on = st.screen_on ? '1' : '';
+      sb.classList.toggle('on', !!st.screen_on);
+      sb.innerHTML = st.screen_on ? `${icon('screen')}Остановить экран` : `${icon('screen')}Записать экран`;
+      sb.title = st.screen_on ? 'Экран пишется (красная рамка по краю). Звук продолжит записываться' : 'Начать запись экрана — звук не прервётся';
+    }
     if ($('#lm')) $('#lm').style.width = (st.levels.mic * 100) + '%';
     if ($('#ls')) $('#ls').style.width = (st.levels.system * 100) + '%';
     if ($('#syswarn')) {
@@ -583,6 +599,7 @@ function pageMini() {
       <button class="bigbtn" id="mgo"></button>
       <div class="mini-mid"><div class="timer" id="mt">00:00</div><div class="rec-state" id="mst"></div></div>
       <button class="btn" id="mmk" title="Отметить момент (M)" hidden>${icon('star')}</button>
+      <button class="btn" id="mscr" hidden>${icon('screen')}</button>
       <button class="btn" id="mpz" hidden></button>
     </div>
     <div class="mini-foot">
@@ -591,9 +608,11 @@ function pageMini() {
       <button class="btn ghost mini-ic" id="mmain" title="Открыть Qamyal">${icon('grow')}</button></div>
     <div class="bar" id="mbar"><i></i></div></div>`;
   const SRC = { mic: 'Разговор', both: 'Созвон', system: 'Звук ПК' };
-  let state = '', busy = false, src = '', lastWork = '';
+  let state = '', busy = false, src = '', lastWork = '', screenOk = false, scrCfg = {};
   const loadSrc = () => api('/api/settings').then(r => {
     const s = r.settings;
+    screenOk = !!(r.screen && r.screen.supported);
+    scrCfg = { quality: s.rec_screen_quality || 'normal', monitor: s.rec_screen_monitor || 0 };
     src = SRC[s.rec_source] + (s.rec_source !== 'mic' && r.services[s.rec_service] ? ' · ' + r.services[s.rec_service] : '')
       + (s.rec_screen && r.screen && r.screen.supported ? ' · экран' : '');
   }).catch(() => {});
@@ -610,11 +629,15 @@ function pageMini() {
         $('#mgo').innerHTML = icon(active ? 'stop' : 'mic');
         $('#mgo').title = active ? 'Стоп и расшифровать' : 'Начать запись';
         $('#mmk').hidden = $('#mpz').hidden = !active;
+        $('#mscr').hidden = !active || !screenOk;
         $('#mpz').innerHTML = icon(state === 'paused' ? 'play' : 'pause');
         $('#mpz').title = state === 'paused' ? 'Продолжить' : 'Пауза';
         $('.mini-rec').classList.toggle('recording-now', state === 'recording');
         if (!active) loadSrc();            // источник могли поменять в основном окне
       }
+      $('#mscr').classList.toggle('on', !!st.screen_on);
+      $('#mscr').dataset.on = st.screen_on ? '1' : '';
+      $('#mscr').title = st.screen_on ? 'Остановить запись экрана' : 'Записать экран';
       $('#mt').textContent = fmtT(active ? st.elapsed : 0);
       $('#mt').classList.toggle('muted', !active);
       $('#mst').innerHTML = st.error ? `<span style="color:var(--rec)">${esc(st.error)}</span>`
@@ -654,6 +677,7 @@ function pageMini() {
   };
   const mark = () => api('/api/rec/mark', {}).then(() => toast('★ Момент отмечен')).catch(fail);
   $('#mmk').onclick = mark;
+  $('#mscr').onclick = () => api('/api/rec/screen', { on: $('#mscr').dataset.on !== '1', ...scrCfg }).then(tick).catch(fail);
   $('#mpz').onclick = () => api('/api/rec/' + (state === 'paused' ? 'resume' : 'pause'), {}).then(tick).catch(fail);
   $('#mmain').onclick = () => miniAction('main').catch(fail);
   const showTop = on => {

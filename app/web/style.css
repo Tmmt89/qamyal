@@ -425,3 +425,5 @@ textarea.gloss { width: 100%; min-height: 56vh; font: 13.5px/1.55 Consolas, "Cas
   .side-col { position: static; max-height: none; }
 }
 @media (max-width: 860px) { .rec-layout { grid-template-columns: 1fr; } }
+
+#scrbtn.on, #mscr.on { color: var(--rec); border-color: var(--rec); }

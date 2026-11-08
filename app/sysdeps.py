@@ -486,3 +486,31 @@ def kill_with_parent(proc) -> None:
             return
         _kill_job = job
     k.AssignProcessToJobObject(wintypes.HANDLE(_kill_job), wintypes.HANDLE(int(proc._handle)))
+
+
+def show_screen_frame(monitor: int = 0):
+    """Красная рамка по краю снимаемого монитора (в запись не попадает). Возвращает процесс или None."""
+    if not IS_WIN:
+        return None
+    mons = screen_monitors()
+    m = mons[monitor] if 0 <= monitor < len(mons) else (mons[0] if mons else None)
+    if not m:
+        return None
+    try:
+        p = subprocess.Popen([gui_python(), str(Path(__file__).with_name("frame_overlay.py")),
+                              str(m["x"]), str(m["y"]), str(m["w"]), str(m["h"])],
+                             stdin=subprocess.PIPE, **HIDDEN)
+    except OSError:
+        return None
+    kill_with_parent(p)
+    return p
+
+
+def hide_screen_frame(p) -> None:
+    if not p:
+        return
+    try:
+        p.stdin.close()                  # рамка ждёт конца трубы и закрывается сама
+        p.wait(timeout=3)
+    except (OSError, subprocess.TimeoutExpired):
+        p.kill()

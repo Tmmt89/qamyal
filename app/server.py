@@ -1166,7 +1166,7 @@ def rec_status():
     return rec.status(int(request.query.get("from", 0) or 0))
 
 
-@app.post("/api/rec/<action:re:start|pause|resume|mark|note|stop>")
+@app.post("/api/rec/<action:re:start|pause|resume|mark|note|stop|screen>")
 def rec_action(action):
     b = body()
     try:
@@ -1183,6 +1183,12 @@ def rec_action(action):
             rec.pause()
         elif action == "resume":
             rec.resume()
+        elif action == "screen":
+            s = load_settings()
+            if not screen_supported():
+                raise RuntimeError("Запись экрана здесь пока недоступна")
+            rec.set_screen(bool(b.get("on")), b.get("quality") or s["rec_screen_quality"],
+                           int(b.get("monitor", s["rec_screen_monitor"]) or 0))
         elif action == "mark":
             rec.mark(b.get("note", ""))
         elif action == "note":

@@ -11,7 +11,8 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from sysdeps import HIDDEN, find_program, kill_with_parent, screen_encoders, screen_inputs
+from sysdeps import (HIDDEN, find_program, hide_screen_frame, kill_with_parent, screen_encoders, screen_inputs,
+                     show_screen_frame)
 
 # высота кадра (0 — как у экрана), кадров в секунду, качество сжатия (меньше — лучше и тяжелее)
 QUALITY = {"low": (720, 5, 30), "normal": (1080, 15, 27), "high": (0, 30, 23)}
@@ -39,14 +40,20 @@ def _variants(quality: str, monitor: int) -> list:
 
 
 def _probe(args: list) -> bool:
-    """Полсекунды пробной съёмки: работают ли этот способ и кодер на этом компьютере."""
+    """Пробная съёмка: работают ли этот способ и кодер на этом компьютере. Не работают — ffmpeg сразу
+    выходит с ошибкой. На неподвижном экране кадры могут не идти, поэтому живой через 4 с ffmpeg — тоже «работает»."""
     try:
-        r = subprocess.run([ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin", *args,
-                            "-frames:v", "5", "-f", "null", "-"],
-                           capture_output=True, timeout=20, **HIDDEN)
-        return r.returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
+        p = subprocess.Popen([ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin", *args,
+                              "-frames:v", "3", "-f", "null", "-"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **HIDDEN)
+    except OSError:
         return False
+    try:
+        return p.wait(timeout=4) == 0
+    except subprocess.TimeoutExpired:
+        p.kill()
+        p.wait()
+        return True
 
 
 def pick(quality: str, monitor: int) -> list:
@@ -70,6 +77,9 @@ class ScreenRecorder:
         self.proc = None
         self.error = ""
         self.closed = False              # «Стоп»: больше кусков не начинаем (сторож мог не успеть узнать)
+        self.enabled = True              # экран можно выключить и снова включить посреди записи
+        self.frame = None                # красная рамка: видна, пока экран действительно пишется
+        self.starting = False            # кусок запускается — сторож не должен считать его упавшим
         self.lock = threading.Lock()
 
     @property
@@ -80,54 +90,70 @@ class ScreenRecorder:
         self.meta_path.write_text(json.dumps({"quality": self.quality, "segments": self.segments},
                                              ensure_ascii=False), encoding="utf-8")
 
-    def start(self, timeout: float = 8.0) -> None:
-        """Новый кусок. Возвращается, когда ffmpeg выдал первые кадры, — звук начнётся уже после картинки."""
+    def start(self, settle: float = 3.0) -> None:
+        """Новый кусок. Ждём первый кадр не дольше settle секунд: Desktop Duplication отдаёт его только когда
+        на экране что-то изменилось, и на неподвижном слайде он может прийти позже — живой ffmpeg без кадра
+        тоже считаем рабочим, время первого кадра запишется, когда кадр придёт. Звук это не задерживает:
+        звук и картинка сводятся по часам."""
         with self.lock:
-            if self.proc or self.closed:
+            if self.proc or self.closed or not self.enabled:
                 return
-            self.args = self.args or pick(self.quality, self.monitor)
-            f = self.base.with_name(f"{self.base.stem}.screen-{len(self.segments) + 1}.mkv")
-            a = self.args
-            log = self.base.with_suffix(".screen.log")
-            with open(log, "ab") as err:          # ошибки ffmpeg — в файл: труба за час записи могла бы переполниться
-                # каждый кадр сразу на диск, блоки mkv — по 2 с: если ffmpeg упадёт, потеряется не больше 2 с
-                p = subprocess.Popen([ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", *a,
-                                      "-flush_packets", "1", "-cluster_time_limit", "2000",
-                                      "-progress", "pipe:1", "-stats_period", "0.1", str(f)],
-                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err, **HIDDEN)
-            kill_with_parent(p)          # Qamyal упала — ffmpeg не должен писать экран дальше
-            first = threading.Event()
-            seg = {"file": f.name, "v0": None}
+            self.starting = True
+            try:
+                self._start(settle)
+            finally:
+                self.starting = False
 
-            def watch():                 # время первого кадра по часам: сейчас минус сколько уже записано
-                for line in p.stdout:
-                    if seg["v0"] is None and line.startswith(b"out_time_us="):
-                        try:
-                            us = int(line.split(b"=")[1])
-                        except ValueError:
-                            continue
-                        if us > 0:
-                            seg["v0"] = round(time.time() - us / 1e6, 3)
-                            first.set()
+    def _start(self, settle: float) -> None:
+        self.args = self.args or pick(self.quality, self.monitor)
+        f = self.base.with_name(f"{self.base.stem}.screen-{len(self.segments) + 1}.mkv")
+        a = self.args
+        log = self.base.with_suffix(".screen.log")
+        with open(log, "ab") as err:          # ошибки ffmpeg — в файл: труба за час записи могла бы переполниться
+            # каждый кадр сразу на диск, блоки mkv — по 2 с: если ffmpeg упадёт, потеряется не больше 2 с
+            p = subprocess.Popen([ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", *a,
+                                  "-flush_packets", "1", "-cluster_time_limit", "2000",
+                                  "-progress", "pipe:1", "-stats_period", "0.1", str(f)],
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err, **HIDDEN)
+        kill_with_parent(p)          # Qamyal упала — ffmpeg не должен писать экран дальше
+        first = threading.Event()
+        seg = {"file": f.name, "v0": None}
 
-            threading.Thread(target=watch, daemon=True).start()
-            if not first.wait(timeout) or p.poll() is not None:
-                self._kill(p)
-                err = log.read_text("utf-8", "replace").strip()
-                f.unlink(missing_ok=True)
-                raise RuntimeError("экран не записывается" + (f": {err.splitlines()[-1]}" if err else ""))
-            self.proc = p
-            self.segments.append(seg)
-            self._save()
+        def watch():                 # время первого кадра по часам: сейчас минус сколько уже записано
+            for line in p.stdout:
+                if seg["v0"] is None and line.startswith(b"out_time_us="):
+                    try:
+                        us = int(line.split(b"=")[1])
+                    except ValueError:
+                        continue
+                    if us > 0:
+                        seg["v0"] = round(time.time() - us / 1e6, 3)
+                        first.set()
+                        if seg in self.segments:
+                            self._save()
+
+        threading.Thread(target=watch, daemon=True).start()
+        first.wait(settle)
+        if p.poll() is not None:     # ffmpeg не смог начать (экран заблокирован, нет доступа к видеокарте)
+            self._kill(p)
+            err = log.read_text("utf-8", "replace").strip()
+            f.unlink(missing_ok=True)
+            raise RuntimeError("экран не записывается" + (f": {err.splitlines()[-1]}" if err else ""))
+        self.proc = p
+        self.segments.append(seg)
+        self._save()
+        self.frame = self.frame or show_screen_frame(self.monitor)
 
     def alive(self) -> bool:
-        return self.proc is not None and self.proc.poll() is None
+        return self.starting or (self.proc is not None and self.proc.poll() is None)
 
     def stop(self, final: bool = False) -> None:
         """Закрыть кусок: «q» — ffmpeg дописывает файл как положено. final — запись закончена совсем."""
         with self.lock:
             self.closed = self.closed or final
             p, self.proc = self.proc, None
+            hide_screen_frame(self.frame)
+            self.frame = None
             if p:
                 self._kill(p)
                 if self.segments:

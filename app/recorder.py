@@ -164,20 +164,42 @@ class Recorder:
     def pause(self):
         if self.state == "recording":
             self.state = "paused"
-            if self.screen:
-                self.screen.stop()
+            if self.screen:                  # ffmpeg закрывается до нескольких секунд — окно ждать не должно
+                threading.Thread(target=self.screen.stop, daemon=True).start()
 
     def resume(self):
         if self.state == "paused":
-            self._screen_segment()           # сначала картинка, потом звук — звук всегда ложится на видео
-            self.state = "recording"
+            self.state = "recording"         # звук — сразу; картинка догонит (сводятся по часам)
+            self._screen_async()
+
+    def set_screen(self, on: bool, quality: str = "normal", monitor: int = 0) -> None:
+        """Включить или выключить запись экрана посреди записи. Видео будет только с тех мест, где экран писался."""
+        if self.state not in ("recording", "paused"):
+            raise RuntimeError("Запись не идёт")
+        if on:
+            if not self.screen:
+                import screen
+                self.screen = screen.ScreenRecorder(self.path, quality, monitor)
+                threading.Thread(target=self._watch_screen, daemon=True).start()
+            self.screen.enabled = True
+            if self.state == "recording":
+                self._screen_async()
+        elif self.screen:
+            self.screen.enabled = False
+            threading.Thread(target=self.screen.stop, daemon=True).start()
+            if self.error.startswith("Экран:"):
+                self.error = ""
 
     # ---------- экран ----------
 
     def _start_screen(self, quality: str, monitor: int):
         import screen
         self.screen = screen.ScreenRecorder(self.path, quality, monitor)
-        self._screen_segment()           # не вышло — звук всё равно пишется, сторож попробует ещё
+        self._screen_async()             # не вышло — звук всё равно пишется, сторож попробует ещё
+
+    def _screen_async(self):
+        """Запуск куска экрана — в фоне: первый кадр может прийти через несколько секунд, звук ждать не должен."""
+        threading.Thread(target=self._screen_segment, daemon=True).start()
 
     def _screen_segment(self):
         if not self.screen:
@@ -211,7 +233,7 @@ class Recorder:
         while self.running and self.screen:
             time.sleep(wait)
             sc_ = self.screen
-            if not sc_ or self.state != "recording" or sc_.alive():
+            if not sc_ or self.state != "recording" or not sc_.enabled or sc_.alive():
                 wait = 2
                 continue
             sc_.stop()                   # упавший кусок закрываем (если он был)
@@ -461,7 +483,8 @@ class Recorder:
         st = {"state": self.state, "elapsed": round(self.frames / SR, 1), "source": self.source,
               "name": self.name, "service": SERVICES.get(self.service, ""),
               "levels": self.levels, "marks": self.marks, "error": self.error,
-              "live": bool(self.live), "screen": bool(self.screen and self.screen.segments)}
+              "live": bool(self.live), "screen": bool(self.screen and self.screen.alive()),
+              "screen_on": bool(self.screen and self.screen.enabled)}
         if self.live:
             st["live_segments"] = self.live.segments[live_from:]
             st["live_from"] = live_from
