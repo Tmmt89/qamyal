@@ -367,18 +367,59 @@ def save_turns(jid):
     return {"ok": True}
 
 
+# падежи простых имён: окончание → (основа без него, окончания им., род., дат., вин., твор., предл.)
+_CASES = [("ий", ["ий", "ия", "ию", "ия", "ием", "ии"]), ("ь", ["ь", "я", "ю", "я", "ем", "е"]),
+          ("й", ["й", "я", "ю", "я", "ем", "е"]),
+          ("ия", ["ия", "ии", "ии", "ию", "ией", "ии"]), ("а", ["а", "ы", "е", "у", "ой", "е"]),
+          ("я", ["я", "и", "е", "ю", "ей", "е"])]
+_CONS = ["", "а", "у", "а", "ом", "е"]
+_FLEET = {"Лев": ("Л", ["ев", "ьва", "ьву", "ьва", "ьвом", "ьве"]),       # беглая гласная
+          "Павел": ("Пав", ["ел", "ла", "лу", "ла", "лом", "ле"])}
+
+
+def name_forms(name: str):
+    """(основа, окончания по падежам) для однословного русского имени; None — склонять не берёмся."""
+    if name in _FLEET:
+        return _FLEET[name]
+    if not re.fullmatch(r"[А-ЯЁ][а-яё]+", name):
+        return None
+    for end, forms in _CASES:
+        if name.endswith(end):
+            stem = name[:-len(end)]
+            if end == "а" and stem[-1:] in "гкхжчшщ":        # Ольга → Ольги, Наташа → Наташи
+                forms = ["а", "и", "е", "у", "ой", "е"]
+            return stem, forms
+    if name[-1] in "бвгджзклмнпрстфхцчшщ":
+        return name, _CONS
+    return None
+
+
 def rename_in_texts(res: dict, old: str, new: str) -> None:
-    """«Спикер 4» в кратком содержании, решениях и задачах — тоже на новое имя (в любом падеже:
-    «Спикеру 4», «Спикера 4»… — имя ставим как есть, склонять не пытаемся)."""
+    """Старое имя в кратком содержании, решениях и задачах — на новое, в том же падеже:
+    «Урала» → «Рафаэля», «Уралом» → «Рафаэлем». «Спикер 4» в любом падеже — на новое имя как есть."""
     m = re.fullmatch(r"Спикер (\d+)", old)
-    rx = re.compile(rf"(?<!\w)Спикер\w*\s+{m.group(1)}(?!\d)" if m else rf"(?<!\w){re.escape(old)}(?!\w)")
+    fo, fn = name_forms(old), name_forms(new)
+    if m:
+        rx, sub = re.compile(rf"(?<!\w)Спикер\w*\s+{m.group(1)}(?!\d)"), new
+    elif fo:
+        stem, ends = fo
+        alts = sorted({e for e in ends}, key=len, reverse=True)
+        rx = re.compile(rf"(?<!\w){re.escape(stem)}({'|'.join(map(re.escape, alts))})(?!\w)")
+
+        def sub(mm):
+            if not fn:
+                return new
+            k = ends.index(mm.group(1))                      # первый подходящий падеж (род. = вин. у мужских)
+            return fn[0] + fn[1][k]
+    else:
+        rx, sub = re.compile(rf"(?<!\w){re.escape(old)}(?!\w)"), new
     for key in ("summary", "decisions"):
-        res[key] = [rx.sub(new, x) for x in res.get(key) or []]
+        res[key] = [rx.sub(sub, x) for x in res.get(key) or []]
     for t in res.get("tasks") or []:
         if isinstance(t, dict):
             for k in ("who", "what"):
                 if isinstance(t.get(k), str):
-                    t[k] = rx.sub(new, t[k])
+                    t[k] = rx.sub(sub, t[k])
 
 
 def merge_stats(res: dict) -> None:

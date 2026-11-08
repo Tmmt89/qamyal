@@ -140,8 +140,26 @@ def timeline(log: Path, anchors: list, duration: float):
     talkers = {u for _, _, u in out}
     covered = sum(b - a for a, b, _ in out)
     if len(talkers) < 2 or covered < 0.3 * duration:
-        return None
+        return one_on_one(ev, people, conv, duration)
     return out, people
+
+
+def one_on_one(ev: list, people: dict, conv, duration: float):
+    """Звонок один на один. Skype сообщает «кто говорит» только в групповых созвонах, а в звонке вдвоём
+    событий нет. Зато собеседник ровно один: всё, что звучит из динамиков, пока идёт звонок, — его речь."""
+    remote = [u for u, p in people.items() if not p["self"]]
+    # открытых разговоров может быть несколько (чат с одним, звонок с другим) — звонок там, где менялся звук
+    in_call = [u for u in remote if any(e["kind"] == "av_state" and e.get("uri") == u for e in ev)]
+    cand = in_call or remote
+    if len(cand) != 1 or any(e["kind"] == "conversation" and e.get("participants", 0) > 2 for e in ev):
+        return None
+    uri = cand[0]
+    hang = next((e["t"] for e in ev if e["kind"] == "av_state" and e.get("uri") == uri
+                 and e.get("state") == "Disconnected"), None)
+    end = min(conv(hang), duration) if hang else duration
+    if end < 1:
+        return None
+    return [(0.0, round(end, 2), uri)], people
 
 
 # ---------- разметка ----------
