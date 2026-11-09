@@ -259,7 +259,9 @@ def process(d: Path, s: dict) -> None:
 
 def main() -> None:
     JOBS.mkdir(exist_ok=True)
-    if worker_pid() and worker_pid() != os.getpid():
+    # два обработчика на одной записи портят её job.json (09.11: диктофон и окно запустили их в одну секунду) —
+    # замок системы, а не проверка «есть ли файл»: её два процесса проходят одновременно
+    if not sysdeps.single_instance(JOBS / ".worker.mutex"):
         return
     LOCK.write_text(str(os.getpid()))
     logging.basicConfig(filename=LOG, encoding="utf-8", level=logging.INFO,

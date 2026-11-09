@@ -525,3 +525,25 @@ def hide_screen_frame(p) -> None:
         p.wait(timeout=3)
     except (OSError, subprocess.TimeoutExpired):
         p.kill()
+
+
+_locks = []
+
+
+def single_instance(path: Path) -> bool:
+    """Только один процесс с этим замком: True — замок наш (держим до выхода), False — уже занят.
+    Замок держит система: если процесс упал, он снимается сам, «зависших» замков не бывает."""
+    f = open(path, "a+b")
+    try:
+        if IS_WIN:
+            import msvcrt
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        return False
+    _locks.append(f)
+    return True

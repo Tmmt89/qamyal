@@ -158,15 +158,29 @@ def fmt_duration(sec: float) -> str:
 
 
 def read_json(path: Path, default=None):
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return default
+    """В Windows файл нельзя прочитать, пока другой процесс подменяет его, — тогда пробуем ещё раз."""
+    for attempt in range(20):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return default
+        except PermissionError:
+            time.sleep(0.05)
+        except (OSError, ValueError):
+            return default
+    return default
 
 
 def write_json(path: Path, data, indent=None) -> None:
-    tmp = path.with_name(path.name + ".tmp")
+    """Через временный файл (у каждого процесса свой) и подмену: файл не бывает записан наполовину."""
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=indent), encoding="utf-8")
+    for attempt in range(20):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:             # файл как раз читают — подождём
+            time.sleep(0.05)
     os.replace(tmp, path)
 
 
@@ -219,6 +233,9 @@ def write_job(d: Path, job: dict) -> None:
 
 def update_job(d: Path, **kw) -> dict:
     job = read_job(d)
+    if not job and (d / "job.json").exists():
+        # не прочиталось (занят, повреждён) — не записываем вместо него обрубок из одних новых полей
+        raise RuntimeError(f"не читается {d / 'job.json'}")
     job.update(kw)
     write_job(d, job)
     return job
