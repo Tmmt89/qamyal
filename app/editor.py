@@ -88,11 +88,16 @@ def call_claude(system: str, prompt: str, s: dict, look: Path = None) -> str:
         cmd += ["--allowedTools", "Read", "--add-dir", str(look)]
     if s.get("claude_model"):
         cmd += ["--model", s["claude_model"]]
-    try:
-        p = subprocess.run(cmd, input=prompt.encode("utf-8"), capture_output=True, cwd=cwd,
-                           timeout=1800, **HIDDEN)
-    except subprocess.TimeoutExpired:
-        raise EditorError("Claude не ответил за 30 минут")
+    # обычно часть текста — 1–3 минуты; 09.11 вызов однажды просто повис на 30 минут, а повтор сразу прошёл —
+    # поэтому ждём до 15 минут и при зависании пробуем ещё раз
+    for attempt in range(2):
+        try:
+            p = subprocess.run(cmd, input=prompt.encode("utf-8"), capture_output=True, cwd=cwd,
+                               timeout=900, **HIDDEN)
+            break
+        except subprocess.TimeoutExpired:
+            if attempt:
+                raise EditorError("Claude дважды не ответил за 15 минут — проверьте интернет и нажмите «Повторить»")
     out = p.stdout.decode("utf-8", "replace").strip()
     try:
         res = json.loads(out)
