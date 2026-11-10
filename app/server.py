@@ -118,7 +118,9 @@ def body() -> dict:
 @app.get("/")
 @app.get("/mini")          # мини-окно: свой адрес — у Chrome свой запомненный размер окна, не как у основного
 def index():
-    return static_file("index.html", root=str(WEB))
+    resp = static_file("index.html", root=str(WEB))
+    resp.set_header("Cache-Control", "no-cache")   # иначе WebKit после обновления берёт старый index.html к новому app.js
+    return resp
 
 
 @app.get("/static/<path:path>")
